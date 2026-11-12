@@ -25,9 +25,10 @@ class ChatsViewModel @Inject constructor(private val repository: ChatRepository)
     fun open(id: Long) = repository.markRead(id)
     fun archive(id: Long) = repository.toggleArchive(id)
     fun pin(id: Long) = repository.togglePin(id)
-    fun send(id: Long, text: String, onSent: () -> Unit) {
+    fun react(chatId: Long, messageId: Long, reaction: String) = repository.toggleReaction(chatId, messageId, reaction)
+    fun send(id: Long, text: String, replyTo: Long? = null, attachment: Attachment? = null, onSent: () -> Unit) {
         viewModelScope.launch {
-            when (repository.send(id, text)) {
+            when (repository.send(id, text, replyTo, attachment)) {
                 SendResult.Sent -> { errorState.value = null; onSent() }
                 SendResult.Empty -> errorState.value = "Write a message first."
                 SendResult.TooLong -> errorState.value = "Use 4,096 characters or fewer."

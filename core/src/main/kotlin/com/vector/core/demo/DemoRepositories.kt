@@ -13,7 +13,7 @@ class DemoChatRepository : ChatRepository {
         Chat(1, "Alex Morgan", "The photos look great. Thank you!", "12:42", 2, pinned = true),
         Chat(2, "Mira Chen", "Coffee tomorrow?", "11:18", 1),
         Chat(3, "Design studio", "Lea: I've shared the new layouts", "10:36", 5, isContact = false),
-        Chat(4, "Listening room", "A few discoveries for the weekend", "Yesterday", isContact = false),
+        Chat(4, "Listening room", "A few discoveries for the weekend", "Yesterday", isContact = false, kind = ChatKind.Channel),
         Chat(5, "Daniel", "See you on Saturday", "Mon"),
         Chat(6, "Old project", "Everything is saved here", "Oct 24", archived = true, isContact = false),
     ))
@@ -25,18 +25,25 @@ class DemoChatRepository : ChatRepository {
     override val chats = chatState.asStateFlow()
     override val messages = messageState.asStateFlow()
 
-    override suspend fun send(chatId: Long, text: String): SendResult {
+    override suspend fun send(chatId: Long, text: String, replyTo: Long?, attachment: Attachment?): SendResult {
         val trimmed = text.trim()
-        if (trimmed.isEmpty()) return SendResult.Empty
+        if (trimmed.isEmpty() && attachment == null) return SendResult.Empty
         if (trimmed.length > 4096) return SendResult.TooLong
         if (chatState.value.none { it.id == chatId }) return SendResult.MissingChat
-        val message = Message(nextId.incrementAndGet(), chatId, trimmed, "Now", Delivery.LocalDemo)
+        val reply = replyTo?.takeIf { id -> messageState.value.any { it.id == id && it.chatId == chatId } }
+        val message = Message(nextId.incrementAndGet(), chatId, trimmed, "Now", Delivery.LocalDemo, replyTo = reply, attachment = attachment)
         messageState.update { messages ->
             // Bound each demonstration conversation; this is not durable message storage.
             messages.filter { it.chatId != chatId } + (messages.filter { it.chatId == chatId } + message).takeLast(100)
         }
-        chatState.update { list -> list.map { if (it.id == chatId) it.copy(preview = trimmed, time = "Now") else it } }
+        chatState.update { list -> list.map { if (it.id == chatId) it.copy(preview = trimmed.ifEmpty { attachment?.name.orEmpty() }, time = "Now") else it } }
         return SendResult.Sent
+    }
+    override fun toggleReaction(chatId: Long, messageId: Long, reaction: String) {
+        if (reaction !in setOf("👍", "❤", "✨")) return
+        messageState.update { list -> list.map {
+            if (it.chatId == chatId && it.id == messageId) it.copy(reaction = reaction.takeUnless { value -> value == it.reaction }) else it
+        } }
     }
     override fun markRead(chatId: Long) = change(chatId) { it.copy(unread = 0) }
     override fun toggleArchive(chatId: Long) = change(chatId) { it.copy(archived = !it.archived) }

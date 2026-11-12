@@ -1,0 +1,4 @@
+# Copy to ignored telegram.properties. Obtain these from https://my.telegram.org/apps.
+# Never put verification codes, two-step passwords, session tokens, or database keys here.
+api.id=
+api.hash=

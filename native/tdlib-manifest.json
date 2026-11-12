@@ -1,0 +1,19 @@
+{
+  "tdlibVersion": "1.8.70",
+  "tdlibCommit": "c8828d50f5eac2fc7089ce1089d7ce9095c61b5e",
+  "interface": "JSONJava",
+  "opensslVersion": "3.5.9",
+  "opensslSourceSha256": "603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a",
+  "ndk": "28.2.13676358",
+  "ndkArchiveSha1": "086bba43ff2f5eb0e387b15c8278bb4e0d89ba1d",
+  "androidApi": 29,
+  "cmake": "4.3.1",
+  "sourceSplit": "official SplitSource.php",
+  "libraries": [
+    {
+      "file": "libtdjsonjava.so",
+      "abi": "arm64-v8a",
+      "sha256": "ffcc97ced586c48dfa60c273fbd24bb16b3c50c8503d57611ca2caf3f8f93be5"
+    }
+  ]
+}

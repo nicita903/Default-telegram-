@@ -6,6 +6,27 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class DemoRepositoryTest {
+    @Test fun foldersDistinguishGroupsAndChannels() {
+        val chats = DemoChatRepository().chats.value
+        assertEquals(listOf(3L), filterChats(chats, "", ChatFilter.Groups).map { it.id })
+        assertEquals(listOf(4L), filterChats(chats, "", ChatFilter.Channels).map { it.id })
+    }
+    @Test fun localRepliesReactionsAndAttachmentsRemainScopedToTheirChat() = runTest {
+        val repository = DemoChatRepository()
+        repository.send(1, "Reply", replyTo = 10)
+        val reply = repository.messages.value.last()
+        assertEquals(10L, reply.replyTo)
+        repository.toggleReaction(2, reply.id, "👍")
+        assertNull(repository.messages.value.last().reaction)
+        repository.toggleReaction(1, reply.id, "👍")
+        assertEquals("👍", repository.messages.value.last().reaction)
+        repository.toggleReaction(1, reply.id, "👍")
+        assertNull(repository.messages.value.last().reaction)
+        repository.send(1, "", replyTo = 20, attachment = Attachment("Notes.txt", "content://demo/notes", "text/plain"))
+        assertNull(repository.messages.value.last().replyTo)
+        assertEquals("Notes.txt", repository.messages.value.last().attachment?.name)
+        assertEquals("Notes.txt", repository.chats.value.first { it.id == 1L }.preview)
+    }
     @Test fun sendingUpdatesOnlyTheSelectedConversation() = runTest {
         val repository = DemoChatRepository()
         val untouched = repository.messages.value.filter { it.chatId == 2L }

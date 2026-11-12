@@ -1,16 +1,20 @@
-# DEFAULT — Phase 1 foundation
+# DEFAULT
+
+Official TDLib authentication is available from the module menu's Account button after developer configuration. See [TDLib setup, security, native provenance, and verification](docs/TDLIB_AUTH.md). Chat synchronization remains outside this phase; existing conversations are still demo content.
+
+The foundation now includes Telegram-inspired screens, a floating module menu, and release-only swipe-and-hold navigation. See [design/navigation implementation, changed files, and verification](docs/DESIGN_NAVIGATION.md). Existing architecture and build versions are preserved.
 
 DEFAULT is the user-requested name for the Vector specification. Application ID: `com.vector.messenger`. Android 10 / API 29 minimum; compile and target API 36.
 
-This milestone contains explicitly labeled, fictional demo conversations. **It is not yet a connected Telegram client.** No account, network permission, authentication, privacy enforcement, notifications, audio import, or playback is included. Demo messages and per-contact Ghost Mode selections live only in memory. Theme and preview preferences use SavedStateHandle for activity/state restoration, not durable settings storage.
+The messaging foundation contains explicitly labeled, fictional demo conversations. The separate TDLib layer supports account authentication, but real chat synchronization, privacy enforcement, notifications, audio import, and playback are not implemented. Demo messages and per-contact Ghost Mode selections live only in memory. Theme and preview preferences use SavedStateHandle for activity/state restoration, not durable settings storage.
 
 ## Implemented
 
 - MVVM, repository contracts, StateFlow, lifecycle-aware collection, and Hilt dependency injection.
 - Central AMOLED dark, light, and system themes, Material typography, and spacing tokens.
-- Edge-to-edge layout, standard text input, IME padding, visible menu navigation, system back handling, and conversation back button.
+- Edge-to-edge layout, standard text input, IME padding, floating module menu, right/left swipe-and-hold navigation, retained module screen stacks, system back handling, and conversation back button. No permanent navigation bar.
 - Searchable chat list with stable keys, unread filter/badges, pinned sorting, archive/unarchive, and contextual actions.
-- Demonstration history and local composer. Local messages are labeled and never presented as delivered to Telegram. Validation retains failed drafts; demo history is bounded to 100 messages per chat.
+- Demonstration history, grouped bubbles, local composer, swipe-to-reply, reply previews, reaction toggles, and document selection. Local messages are labeled and never presented as delivered/read by Telegram. Validation retains failed drafts; demo history is bounded to 100 messages per chat. Selected attachments reference local document URIs and are not uploaded.
 - Contacts, settings, appearance selection, and notification-preview demonstration controls.
 - Per-contact Ghost Mode UI for typing, recording, online, and last seen, with Telegram limitations explained.
 - Music sections for tracks, albums, artists, playlists, favorites, and recently played, with honest empty states. Downloads has a separate destination.
@@ -24,6 +28,7 @@ core/                          Pure Kotlin module; no Android or TDLib
     Models.kt                  Models, filtering, result types
     Repositories.kt            Data access contracts
     demo/                      In-memory fixtures/repositories
+    auth/                      Auth states/contracts/repository
   src/test/                    Repository behavior tests
 app/
   src/main/java/com/vector/messenger/
@@ -32,6 +37,7 @@ app/
     di/                        Demo repository bindings
     design/                    Central colors and spacing
     navigation/                Navigation Compose graph/menu
+    telegram/                  TDLib JNI owner, mappings, configuration, key vault
     feature/                   ViewModels and feature screens
   src/test/                    ViewModel and route tests
   src/androidTest/             Compose device tests
@@ -39,7 +45,7 @@ gradle/wrapper/                Wrapper JAR and configuration
 docs/PHASE1.md                 Change inventory and verification
 ```
 
-Two modules keep Android-independent behavior testable without fragmenting empty features. The UI never calls TDLib. Room, Coil, Media3, WorkManager, and Keystore integration are deferred until they have actual storage, media, background, or secret-management responsibilities.
+Two modules keep Android-independent behavior testable without fragmenting empty features. The UI never calls TDLib directly. Room, Coil, Media3, and WorkManager remain deferred; Android Keystore now protects the TDLib database key.
 
 ## Toolchain and setup
 
@@ -80,13 +86,14 @@ The prototype BOM 2026.09.00 requires API 37 and AGP 9.1+, so it was replaced wi
 
 APK: `app/build/outputs/apk/debug/app-debug.apk`. Reports: each module's `build/reports/`; device reports: `app/build/reports/androidTests/connected/`.
 
-## Security and next phase
+## Security and remaining phases
 
-- No secrets, session databases, message logs, custom crypto, networking SDKs, or sensitive persistent data are introduced. Backup and device transfer are excluded, and cleartext traffic is prohibited. The app exports its launcher activity; AndroidX adds a permission-protected profile installer receiver, and debug UI-test dependencies add a test activity. Review the merged release manifest before shipping.
+- TDLib authentication data is private and excluded from backup/transfer; its database key is wrapped with Android Keystore. API configuration is ignored in Git and generated only for local builds. Account passwords/codes are not persisted or logged. See the authentication security notes for APK-extractability and transient-memory limits.
+- Cleartext traffic remains prohibited. The app exports its launcher activity; AndroidX adds a permission-protected profile installer receiver, and debug UI-test dependencies add a test activity. Review the merged release manifest before shipping.
 - Ghost Mode is a UI foundation. It cannot guarantee invisibility. Telegram server rules and normal online exceptions apply; Premium does not generally bypass others' last seen restrictions.
 - Cloud chats are not end-to-end encrypted; supported Secret Chats have a separate encryption model.
-- Phase 2 requires a pinned, verified official [TDLib](https://github.com/tdlib/td) build, lifecycle and authorization state management, repository mapping, and Keystore-protected database keys. Obtain API ID/hash at [my.telegram.org](https://my.telegram.org) and load them from ignored local configuration. Never put verification codes, passwords, or session keys in prompts, logs, or source.
+- The next messaging phase requires real chat synchronization, message history, sending/receiving and notification lifecycle handling through the official TDLib layer. Live authentication must first be verified manually with your developer configuration and account.
 - Real per-contact privacy preferences require protected persistent storage and account scoping. Demo controls must never be silently treated as server-confirmed settings.
 - No independent security audit or performance improvement is claimed. Accessibility, background behavior, and performance need further device testing before daily use.
 
-This directory has no Git repository. No branch or milestone commit was created, and no Git history was modified.
+The existing Git working tree, including prior uncommitted design/navigation changes, is preserved. No commit or reset was performed for the authentication phase.

@@ -15,6 +15,8 @@ class PreferencesViewModel @Inject constructor(
     val ghostPreferences = ghost.preferences
     val theme = savedState.getStateFlow("theme", ThemeMode.System.name)
     val hidePreviews = savedState.getStateFlow("hidePreviews", true)
+    val moduleGestures = savedState.getStateFlow("moduleGestures", true)
+    fun moduleGestures(value: Boolean) { savedState["moduleGestures"] = value }
     fun theme(value: ThemeMode) { savedState["theme"] = value.name }
     fun hidePreviews(value: Boolean) { savedState["hidePreviews"] = value }
     fun updateGhost(id: Long, value: GhostPreferences) = ghost.update(id, value)
