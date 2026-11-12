@@ -1,0 +1,15 @@
+*.iml
+.gradle/
+.idea/
+local.properties
+build/
+**/build/
+*.keystore
+*.jks
+.env
+.kotlin/
+telegram.properties
+**/tdlib/
+**/sessions/
+*.hprof
+*.log
