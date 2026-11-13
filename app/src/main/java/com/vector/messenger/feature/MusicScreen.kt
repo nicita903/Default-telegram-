@@ -9,6 +9,12 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.vector.messenger.navigation.gesture.excludeModuleGestures
+import com.vector.messenger.design.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.ui.Alignment
 
 @Composable
 fun MusicScreen(onSection: (String) -> Unit = {}) {
@@ -16,11 +22,13 @@ fun MusicScreen(onSection: (String) -> Unit = {}) {
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Text("Your offline library", style = MaterialTheme.typography.headlineSmall)
         Text("Keep the music you choose, ready wherever you are.", color = MaterialTheme.colorScheme.onSurfaceVariant)
-        listOf("Tracks", "Albums", "Artists", "Playlists", "Favorites", "Recently played").chunked(2).forEach { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.excludeModuleGestures()) {
-                row.forEach { title ->
-                    FilterChip(selected = section == title, onClick = { section = title; onSection(title) }, label = { Text(title) })
+        listOf("Tracks", "Albums", "Artists", "Playlists", "Favorites", "Recently played").forEach { title ->
+            Row(Modifier.fillMaxWidth().excludeModuleGestures().clickable(interactionSource = remember { MutableInteractionSource() }, indication = null) { section = title; onSection(title) }
+                .heightIn(min = 56.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+                Box(Modifier.size(36.dp).background(DefaultDesign.colors.panel, CircleShape), contentAlignment = Alignment.Center) {
+                    Icon(VectorIcons.Music, null, Modifier.size(18.dp), tint = DefaultDesign.colors.accent)
                 }
+                Text(title, color = if (section == title) DefaultDesign.colors.accent else DefaultDesign.colors.text)
             }
         }
         HorizontalDivider()

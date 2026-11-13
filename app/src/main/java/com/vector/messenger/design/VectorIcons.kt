@@ -9,6 +9,7 @@ import androidx.compose.ui.unit.dp
 
 /** Small code-native line icons; no additional icon dependency. */
 object VectorIcons {
+    val Minus by lazy { icon("Decrease") { moveTo(6f, 12f); lineTo(18f, 12f) } }
     private fun icon(name: String, block: PathBuilder.() -> Unit) = ImageVector.Builder(name, 24.dp, 24.dp, 24f, 24f).apply {
         path(fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 1.7f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round, pathBuilder = block)
     }.build()

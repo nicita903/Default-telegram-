@@ -14,32 +14,56 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vector.core.*
 import com.vector.messenger.navigation.gesture.excludeModuleGestures
+import com.vector.messenger.design.*
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.ui.graphics.Color
 
 @Composable
 fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit) {
     val theme by viewModel.theme.collectAsStateWithLifecycle()
     val previews by viewModel.hidePreviews.collectAsStateWithLifecycle()
-    val gestures by viewModel.moduleGestures.collectAsStateWithLifecycle()
+    val settings by viewModel.appearance.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp).testTag("settings_scroll"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Appearance", style = MaterialTheme.typography.titleMedium)
-        ThemeMode.entries.forEach { mode ->
-            Row(modifier = Modifier.excludeModuleGestures(), verticalAlignment = Alignment.CenterVertically) {
-                RadioButton(selected = theme == mode.name, onClick = { viewModel.theme(mode) })
-                TextButton(onClick = { viewModel.theme(mode) }) { Text("${mode.name} theme") }
-            }
+        Row(Modifier.excludeModuleGestures(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            ThemeMode.entries.forEach { mode -> DefaultAction("${mode.name} theme", { viewModel.theme(mode) }, Modifier.weight(1f), emphasized = theme == mode.name) }
         }
-        HorizontalDivider()
-        Text("Navigation", style = MaterialTheme.typography.titleMedium)
-        PreferenceToggle("Swipe and hold navigation", gestures, viewModel::moduleGestures)
-        Text("Swipe right 28 dp and hold briefly, then release to open modules. Swipe left and hold, then release to return to the previous module. Message bubbles, input fields, controls, and system edges are excluded. The menu button is always available.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-        HorizontalDivider()
+        Text("Navigation & Gestures", style = MaterialTheme.typography.titleMedium)
+        PreferenceToggle("Swipe and hold navigation", settings.modules, viewModel::moduleGestures)
+        SettingStepper("Swipe activation distance", settings.distance, listOf(20, 28, 36, 48, 60), "dp") { value -> viewModel.appearance { it.copy(distance = value) } }
+        SettingStepper("Hold duration", settings.hold, listOf(120, 180, 240, 320, 400), "ms") { value -> viewModel.appearance { it.copy(hold = value) } }
+        PreferenceToggle("Haptic feedback", settings.haptics) { value -> viewModel.appearance { it.copy(haptics = value) } }
+        SettingStepper("Screen zoom intensity", settings.zoom, listOf(0, 3, 5, 8, 10), "%") { value -> viewModel.appearance { it.copy(zoom = value) } }
+        SettingStepper("Animation speed", settings.speed, listOf(50, 75, 100, 125, 150), "%") { value -> viewModel.appearance { it.copy(speed = value) } }
+        DefaultRule()
+        Text("Search navigation", style = MaterialTheme.typography.titleMedium)
+        PreferenceToggle("Pull-down search", settings.pullSearch) { value -> viewModel.appearance { it.copy(pullSearch = value) } }
+        SettingStepper("Pull-down activation distance", settings.pullDistance, listOf(48, 60, 72, 96, 120), "dp") { value -> viewModel.appearance { it.copy(pullDistance = value) } }
+        PreferenceToggle("Fast Chat/Music switching", settings.fastSearch) { value -> viewModel.appearance { it.copy(fastSearch = value) } }
+        SettingStepper("Fast-swipe sensitivity", settings.sensitivity, listOf(70, 85, 100, 120, 140), "%") { value -> viewModel.appearance { it.copy(sensitivity = value) } }
+        PreferenceToggle("Automatic search locking", settings.autoLock) { value -> viewModel.appearance { it.copy(autoLock = value) } }
+        PreferenceToggle("Lock indicator visibility", settings.lockVisible) { value -> viewModel.appearance { it.copy(lockVisible = value) } }
+        PreferenceToggle("Elastic locked-swipe feedback", settings.elastic) { value -> viewModel.appearance { it.copy(elastic = value) } }
+        DefaultRule()
+        Text("Interface", style = MaterialTheme.typography.titleMedium)
+        PreferenceToggle("Compact density", settings.compact) { value -> viewModel.appearance { it.copy(compact = value) } }
+        SettingStepper("Accent color", settings.accent, listOf(0, 1, 2), "", listOf("Electric blue", "Ice blue", "Periwinkle")) { value -> viewModel.appearance { it.copy(accent = value) } }
+        SettingStepper("Animation intensity", settings.intensity, listOf(0, 25, 50, 75, 100), "%") { value -> viewModel.appearance { it.copy(intensity = value) } }
+        PreferenceToggle("Reduced motion", settings.reducedMotion) { value -> viewModel.appearance { it.copy(reducedMotion = value) } }
+        SettingStepper("Typography scale", settings.typeScale, listOf(85, 100, 115, 130), "%") { value -> viewModel.appearance { it.copy(typeScale = value) } }
+        Text("Pull from the top of Chats to search. Fast swipes change an unlocked search scope; swipe and hold opens modules after release. Search is also available in the module menu.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        DefaultRule()
         Text("Privacy", style = MaterialTheme.typography.titleMedium)
-        TextButton(onClick = onPrivacy) { Text("Ghost Mode") }
+        DefaultAction("Ghost Mode", onPrivacy)
         PreferenceToggle("Hide notification previews", previews, viewModel::hidePreviews)
         Text("Preview preference only. Notifications are not implemented in this phase.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         HorizontalDivider()
         Text("About DEFAULT", style = MaterialTheme.typography.titleMedium)
-        Text("Foundation · 0.1.0\nSample conversations stay in memory. No account is connected. Appearance preferences survive activity recreation; all controls remain demonstrations.")
+        Text("Default · 0.1.0\nAppearance preferences are stored on this device. Sample conversations are not synchronized. Manage your Telegram session from Account.")
         Text("Telegram cloud chats are not end-to-end encrypted. Only supported Secret Chats offer Telegram's end-to-end encryption model.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
@@ -67,6 +91,21 @@ fun PrivacyScreen(contacts: List<Chat>, viewModel: PreferencesViewModel) {
 fun PreferenceToggle(title: String, selected: Boolean, onChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).excludeModuleGestures().toggleable(value = selected, role = Role.Switch, onValueChange = onChange), verticalAlignment = Alignment.CenterVertically) {
         Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-        Switch(checked = selected, onCheckedChange = null)
+        Box(Modifier.width(30.dp).height(18.dp).background(if (selected) DefaultDesign.colors.accent else DefaultDesign.colors.raised, CircleShape).padding(3.dp)) {
+            Box(Modifier.size(12.dp).align(if (selected) Alignment.CenterEnd else Alignment.CenterStart).background(if (selected) Color.Black else DefaultDesign.colors.secondary, CircleShape))
+        }
+    }
+}
+
+@Composable
+private fun SettingStepper(title: String, value: Int, options: List<Int>, unit: String, names: List<String>? = null, onChange: (Int) -> Unit) {
+    val index = options.indexOf(value).coerceAtLeast(0)
+    Row(Modifier.fillMaxWidth().heightIn(min = 64.dp).excludeModuleGestures(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text(title, color = DefaultDesign.colors.text, style = MaterialTheme.typography.bodyMedium)
+            Text(names?.getOrNull(index) ?: "$value $unit", color = DefaultDesign.colors.secondary, style = MaterialTheme.typography.labelSmall)
+        }
+        DefaultIconControl(VectorIcons.Minus, "Decrease $title", { onChange(options[(index - 1).coerceAtLeast(0)]) }, enabled = index > 0, quiet = true)
+        DefaultIconControl(Icons.Default.Add, "Increase $title", { onChange(options[(index + 1).coerceAtMost(options.lastIndex)]) }, enabled = index < options.lastIndex, quiet = true)
     }
 }

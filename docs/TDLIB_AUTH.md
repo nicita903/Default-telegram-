@@ -115,7 +115,7 @@ Prior uncommitted navigation/design work was preserved. The authentication chang
 | Auth ViewModel/UI | `app/src/main/java/com/vector/messenger/feature/AuthenticationViewModel.kt`, `AuthenticationScreen.kt` |
 | Existing entry points | `app/src/main/java/com/vector/messenger/MainActivity.kt`, `navigation/DefaultApp.kt`, `navigation/VectorModuleMenu.kt` |
 | Build/configuration | `app/build.gradle.kts`, `app/src/main/AndroidManifest.xml`, `.gitignore`, `telegram.properties.example` |
-| Native recipe/provenance/licenses | `scripts/Build-TdlibAndroid.ps1`, `native/tdlib-manifest.json`, `native/TDLIB_LICENSE.txt`, `app/src/main/assets/licenses/` |
+| Native recipe/provenance/license | `scripts/Build-TdlibAndroid.ps1`, `native/tdlib-manifest.json`, `native/TDLIB_LICENSE.txt`, `app/src/main/assets/licenses/` |
 | Tests | `core/src/test/kotlin/com/vector/core/AuthenticationRepositoryTest.kt`, `app/src/androidTest/java/com/vector/messenger/AuthenticationUiTest.kt`, `telegram/TdlibIntegrationTest.kt`, plus the Account-window check in `FoundationUiTest.kt` |
 | Documentation | `README.md`, `docs/TDLIB_AUTH.md` |
 

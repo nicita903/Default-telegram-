@@ -8,9 +8,14 @@ import androidx.compose.ui.unit.dp
 import org.junit.Assert.assertEquals
 import org.junit.Rule
 import org.junit.Test
+import org.junit.Before
+import org.junit.After
 
 class NavigationGestureUiTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    private val appearance = TerminalTestAppearance(compose)
+    @Before fun resetAppearance() = appearance.before()
+    @After fun restoreAppearance() = appearance.after()
     private val header get() = compose.onNodeWithTag("header_gesture_surface")
     private val distance get() = with(compose.density) { 32.dp.toPx() }
     private fun openModule(name: String) {
@@ -47,11 +52,11 @@ class NavigationGestureUiTest {
         compose.onNodeWithText("Your offline library").assertIsDisplayed()
         beginHold(left = true)
         header.performTouchInput { up() }
-        compose.onNodeWithText("Search conversations").assertIsDisplayed()
+        compose.onNodeWithTag("chat_list").assertIsDisplayed()
         // No previous module: stay put, with feedback rather than inventing history.
         beginHold(left = true); header.performTouchInput { up() }
         compose.onNodeWithText("No previous module").assertIsDisplayed()
-        compose.onNodeWithText("Search conversations").assertIsDisplayed()
+        compose.onNodeWithTag("chat_list").assertIsDisplayed()
     }
     @Test fun earlyReleaseVerticalReversalMultitouchAndSystemCancelNeverNavigate() {
         header.performTouchInput { down(center); moveBy(Offset(distance, 0f)); up() }
@@ -62,7 +67,7 @@ class NavigationGestureUiTest {
         beginHold()
         header.performTouchInput { cancel() }
         compose.onNodeWithContentDescription("Close navigation").assertDoesNotExist()
-        compose.onNodeWithText("Search conversations").assertIsDisplayed()
+        compose.onNodeWithTag("chat_list").assertIsDisplayed()
         assertEquals("Idle", header.fetchSemanticsNode().config[SemanticsProperties.StateDescription])
     }
     @Test fun allModulesOpenAndMusicInternalStateSurvivesSwitchingAndBack() {
@@ -72,7 +77,7 @@ class NavigationGestureUiTest {
         openModule("Settings"); compose.onNodeWithText("Appearance").assertIsDisplayed()
         openModule("Music"); compose.onNodeWithText("Playlists").performClick()
         compose.onNodeWithText("No playlists yet").assertIsDisplayed()
-        openModule("Chats"); compose.onNodeWithText("Search conversations").performTextInput("Mira")
+        openModule("Chats"); openChatSearch(compose); compose.onNodeWithText("Search conversations").performTextInput("Mira")
         openModule("Music"); compose.onNodeWithText("No playlists yet").assertIsDisplayed()
         systemBack() // Internal Music screen before module history.
         compose.onNodeWithText("Your offline library").assertIsDisplayed()
@@ -85,7 +90,7 @@ class NavigationGestureUiTest {
         compose.onNodeWithContentDescription("Close navigation").assertIsDisplayed()
         compose.waitUntil(3000) { !compose.activity.hasWindowFocus() }
         systemBack()
-        compose.onNodeWithText("Search conversations").assertIsDisplayed()
+        compose.onNodeWithTag("chat_list").assertIsDisplayed()
         compose.onNodeWithContentDescription("Close navigation").assertDoesNotExist()
         compose.onNodeWithContentDescription("Open navigation").performClick()
         compose.onNode(isDialog()).performTouchInput { click(Offset(width - 8f, height / 2f)) }
@@ -98,7 +103,7 @@ class NavigationGestureUiTest {
         openModule("Chats")
         compose.onNodeWithText("Keep my draft").assertIsDisplayed()
         systemBack()
-        compose.onNodeWithText("Search conversations").assertIsDisplayed()
+        compose.onNodeWithTag("chat_list").assertIsDisplayed()
     }
     @Test fun gesturesCanBeDisabledAndMenuButtonStillWorks() {
         openModule("Settings")
@@ -109,10 +114,12 @@ class NavigationGestureUiTest {
         header.performTouchInput { up() }
         compose.onNodeWithContentDescription("Close navigation").assertDoesNotExist()
         openModule("Chats")
-        compose.onNodeWithText("Search conversations").assertIsDisplayed()
+        compose.onNodeWithTag("chat_list").assertIsDisplayed()
     }
     @Test fun verticalListScrollAndSearchFieldNeverOpenMenu() {
         compose.onNodeWithTag("chat_list").performTouchInput { swipeUp() }
+        compose.onNodeWithTag("chat_list").performScrollToIndex(0)
+        openChatSearch(compose)
         compose.onNodeWithText("Search conversations").performTouchInput { down(center); moveBy(Offset(distance, 0f)) }
         Thread.sleep(260)
         compose.onNodeWithText("Search conversations").performTouchInput { up() }
@@ -128,7 +135,9 @@ class NavigationGestureUiTest {
         compose.onNodeWithContentDescription("Close navigation").assertDoesNotExist()
         compose.onNodeWithText("Demo message").performTextInput("A reply")
         compose.onNodeWithContentDescription("Send demo message").performClick()
-        compose.onNodeWithTag("message_list").performScrollToNode(hasText("A reply"))
+        compose.onNodeWithText("A reply").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Back to chats").assertIsDisplayed()
+        awaitConversationKeyboardClosed(compose)
         saveDesignScreenshot(compose.onRoot(), "reply")
         compose.onNodeWithText("Reply").assertIsDisplayed()
         compose.onNodeWithText("A reply").performTouchInput { longClick() }

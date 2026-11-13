@@ -4,9 +4,14 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import org.junit.Rule
 import org.junit.Test
+import org.junit.Before
+import org.junit.After
 
 class FoundationUiTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
+    private val appearance = TerminalTestAppearance(compose)
+    @Before fun resetAppearance() = appearance.before()
+    @After fun restoreAppearance() = appearance.after()
 
     @Test fun accountWindowIsSecureAndReturnsToTheExistingChats() {
         compose.onNodeWithContentDescription("Open navigation").performClick()
@@ -20,31 +25,27 @@ class FoundationUiTest {
             org.junit.Assert.assertTrue("The account window must use FLAG_SECURE", secure)
         }
         compose.onNodeWithContentDescription("Close account").performClick()
-        compose.onNodeWithTag("chat_search").assertIsDisplayed()
+        compose.onNodeWithTag("chat_list").assertIsDisplayed()
     }
 
     @Test fun searchOpenComposeAndReturn() {
         saveDesignScreenshot(compose.onRoot(), "chats")
+        openChatSearch(compose)
         compose.onNodeWithText("Search conversations").performTextInput("Alex")
         compose.onNodeWithText("Alex Morgan").performClick()
         compose.onNodeWithText("Demo message").performTextInput("A local test message")
         compose.onNodeWithContentDescription("Send demo message").performClick()
         compose.onNodeWithText("A local test message").assertIsDisplayed()
-        compose.runOnUiThread {
-            val input = compose.activity.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager
-            input.hideSoftInputFromWindow(compose.activity.window.decorView.windowToken, 0)
-        }
-        compose.waitUntil(3000) { androidx.core.view.ViewCompat.getRootWindowInsets(compose.activity.window.decorView)?.isVisible(androidx.core.view.WindowInsetsCompat.Type.ime()) == false }
-        compose.waitForIdle()
+        awaitConversationKeyboardClosed(compose)
         saveDesignScreenshot(compose.onRoot(), "conversation")
         compose.onNodeWithContentDescription("Back to chats").performClick()
-        compose.onNodeWithTag("chat_search").assertIsDisplayed()
+        compose.onNodeWithTag("chat_list").assertIsDisplayed()
     }
     @Test fun menuProvidesSettingsMusicAndPrivacy() {
         compose.onNodeWithContentDescription("Open navigation").performClick()
         compose.onNodeWithText("Settings").performClick()
         compose.onNodeWithText("Light theme").performClick()
-        compose.onNodeWithText("Ghost Mode").performClick()
+        compose.onNodeWithText("Ghost Mode").performScrollTo().performClick()
         compose.onNodeWithText("Suppress typing · Alex Morgan").performClick().assertIsOn()
         compose.onNodeWithText("Suppress recording · Alex Morgan").assertIsOff()
         compose.onNodeWithContentDescription("Open navigation").performClick()

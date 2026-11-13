@@ -13,6 +13,7 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object RepositoryModule {
+    @Provides fun appearance(store: com.vector.messenger.feature.AppearanceStore): com.vector.messenger.feature.AppearancePreferences = store
     @Provides @Singleton fun chats(): ChatRepository = DemoChatRepository()
     @Provides @Singleton fun ghost(): GhostRepository = DemoGhostRepository()
 }

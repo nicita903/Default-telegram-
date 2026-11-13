@@ -19,6 +19,9 @@ import com.vector.messenger.feature.ChatsViewModel
 import com.vector.messenger.feature.PreferencesViewModel
 import com.vector.messenger.feature.AuthenticationViewModel
 import com.vector.messenger.feature.AuthenticationDialog
+import com.vector.messenger.feature.LocalAppearance
+import androidx.compose.runtime.CompositionLocalProvider
+import com.vector.messenger.feature.search.SearchViewModel
 import com.vector.messenger.navigation.DefaultApp
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -27,6 +30,7 @@ class MainActivity : ComponentActivity() {
     private val chats: ChatsViewModel by viewModels()
     private val preferences: PreferencesViewModel by viewModels()
     private val authentication: AuthenticationViewModel by viewModels()
+    private val search: SearchViewModel by viewModels()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
@@ -41,9 +45,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
             var accountOpen by remember { mutableStateOf(false) }
+            val appearance by preferences.appearance.collectAsStateWithLifecycle()
+            CompositionLocalProvider(LocalAppearance provides appearance) {
             DefaultTheme(ThemeMode.valueOf(theme)) {
-                DefaultApp(chats, preferences, onAccount = { accountOpen = true })
+                DefaultApp(chats, preferences, search, onAccount = { accountOpen = true })
                 if (accountOpen) AuthenticationDialog(account, onClose = { accountOpen = false })
+            }
             }
         }
     }

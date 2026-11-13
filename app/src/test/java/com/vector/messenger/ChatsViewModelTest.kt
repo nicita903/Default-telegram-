@@ -16,6 +16,9 @@ import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
+import com.vector.messenger.feature.AppearancePreferences
+import com.vector.messenger.feature.AppearanceSettings
+import kotlinx.coroutines.flow.MutableStateFlow
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class ChatsViewModelTest {
@@ -49,10 +52,16 @@ class ChatsViewModelTest {
     }
     @Test fun settingsRestoreThroughSavedState() {
         val state = SavedStateHandle()
-        val first = PreferencesViewModel(DemoGhostRepository(), state)
+        val preferences = object : AppearancePreferences {
+            override val state = MutableStateFlow(AppearanceSettings())
+            override val theme = MutableStateFlow("System")
+            override fun theme(value: String) { theme.value = value }
+            override fun update(change: (AppearanceSettings) -> AppearanceSettings) { this.state.value = change(this.state.value) }
+        }
+        val first = PreferencesViewModel(DemoGhostRepository(), state, preferences)
         first.theme(ThemeMode.Light)
         first.hidePreviews(false)
-        val restored = PreferencesViewModel(DemoGhostRepository(), state)
+        val restored = PreferencesViewModel(DemoGhostRepository(), state, preferences)
         assertEquals(ThemeMode.Light.name, restored.theme.value)
         assertFalse(restored.hidePreviews.value)
     }
