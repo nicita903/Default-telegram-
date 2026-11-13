@@ -28,6 +28,7 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
+import androidx.compose.ui.graphics.Color
 
 @Composable
 fun DefaultIconControl(
@@ -51,19 +52,26 @@ fun DefaultIconControl(
 @Composable
 fun DefaultAction(
     text: String, onClick: () -> Unit, modifier: Modifier = Modifier,
-    icon: ImageVector? = null, emphasized: Boolean = false, enabled: Boolean = true,
+    icon: ImageVector? = null, emphasized: Boolean = false, enabled: Boolean = true, compact: Boolean = false,
 ) {
     val colors = DefaultDesign.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val focused by interaction.collectIsFocusedAsState()
     val scale = animateFloatAsState(if (pressed) VectorMotionSpec.pressScale(.97f) else 1f, VectorMotionSpec.scale(), label = "Action compression")
-    Row(modifier.heightIn(min = DefaultDesign.minimumTarget).graphicsLayer { scaleX = scale.value; scaleY = scale.value }
+    Row(modifier.heightIn(min = if (compact) 35.dp else DefaultDesign.minimumTarget).graphicsLayer { scaleX = scale.value; scaleY = scale.value }
         .clip(RoundedCornerShape(DefaultDesign.controlRadius))
-        .background(if (emphasized) colors.accent else if (pressed) colors.raised else colors.panel)
+        .background(
+            when {
+                emphasized && pressed -> Color(0xFF2679DB)
+                emphasized -> colors.accent
+                pressed -> colors.raised
+                else -> colors.panel
+            }
+        )
         .border(1.dp, if (focused) colors.accent else androidx.compose.ui.graphics.Color.Transparent, RoundedCornerShape(DefaultDesign.controlRadius))
         .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick)
-        .padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        .padding(horizontal = if (compact) 15.dp else 18.dp,vertical = if (compact) 3.dp else 6.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
         val foreground = if (emphasized) colors.base else colors.text
         icon?.let { Icon(it, null, Modifier.size(18.dp), tint = foreground) }
         Text(text, style = MaterialTheme.typography.labelLarge, color = if (enabled) foreground else colors.secondary, maxLines = 2, overflow = TextOverflow.Ellipsis)

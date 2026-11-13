@@ -12,7 +12,6 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.Icon
@@ -50,24 +49,77 @@ fun ChatsScreen(viewModel: ChatsViewModel, onSelect: (Long) -> Unit, onSearch: (
     val density = androidx.compose.ui.platform.LocalDensity.current
     val offset = animateFloatAsState(pull.distance * .45f, VectorMotionSpec.scale(), label = "Search pull")
     Column(Modifier.fillMaxSize()) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("${chats.size} conversations", style = MaterialTheme.typography.labelSmall, color = colors.secondary, modifier = Modifier.weight(1f))
-            DefaultIconControl(Icons.Default.Edit, "New message", { newMessage = true }, Modifier.excludeModuleGestures(), emphasized = true)
+
+        // Chats header
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Text(
+                text = "${chats.size} conversations",
+                style = MaterialTheme.typography.labelSmall,
+                color = colors.secondary,
+                modifier = Modifier.weight(1f)
+            )
+
+            DefaultAction(
+                text = "New chat",
+                onClick = { newMessage = true },
+                modifier = Modifier.excludeModuleGestures(),
+                emphasized = true,
+                compact = true
+            )
         }
-        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).excludeModuleGestures()) {
+
+        // Chat folders
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .excludeModuleGestures()
+        ) {
             ChatFilter.entries.forEach { folder ->
+
                 val active = folder == filter
                 val interaction = remember { MutableInteractionSource() }
-                Column(Modifier.width(IntrinsicSize.Max).widthIn(min = 76.dp)
-                    .selectableFolder(active, interaction) { viewModel.filter(folder) }) {
-                    Box(Modifier.heightIn(min = 48.dp).padding(horizontal = 20.dp, vertical = 14.dp), contentAlignment = Alignment.Center) {
-                        Text(if (folder == ChatFilter.All) "All chats" else folder.name,
-                            style = MaterialTheme.typography.labelLarge, color = if (active) colors.accent else colors.secondary, maxLines = 1)
+
+                Column(
+                    modifier = Modifier
+                        .width(IntrinsicSize.Max)
+                        .widthIn(min = 76.dp)
+                        .selectableFolder(active, interaction) {
+                            viewModel.filter(folder)
+                        }
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .heightIn(min = 48.dp)
+                            .padding(horizontal = 20.dp, vertical = 14.dp),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = if (folder == ChatFilter.All) "All chats" else folder.name,
+                            style = MaterialTheme.typography.labelLarge,
+                            color = if (active) colors.accent else colors.secondary,
+                            maxLines = 1
+                        )
                     }
-                    Box(Modifier.fillMaxWidth().padding(horizontal = 20.dp).height(2.dp).background(if (active) colors.accent else Color.Transparent))
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 20.dp)
+                            .height(2.dp)
+                            .background(
+                                if (active) colors.accent else Color.Transparent
+                            )
+                    )
                 }
             }
         }
+
         DefaultRule()
         if (chats.isEmpty()) EmptyState("No conversations", "Try a different search or folder.")
         Box(Modifier.weight(1f).fillMaxWidth().pullToSearch(listState, pull, appearance.pullSearch, appearance.pullDistance, appearance.haptics, onSearch)
@@ -124,11 +176,41 @@ private fun ChatRow(chat: Chat, selected: Boolean, onClick: () -> Unit, onPin: (
                 }
             }
         }
-        Box(Modifier.padding(horizontal = 2.dp).excludeModuleGestures()) {
-            DefaultIconControl(Icons.Default.MoreVert, "Actions for ${chat.title}", { menu = true }, quiet = true)
-            DefaultActionMenu(menu, { menu = false }) {
-                DefaultAction(if (chat.pinned) "Unpin" else "Pin", { onPin(); menu = false }, Modifier.fillMaxWidth(), VectorIcons.Pin)
-                DefaultAction(if (chat.archived) "Unarchive" else "Archive", { onArchive(); menu = false }, Modifier.fillMaxWidth(), VectorIcons.Download)
+        Box(
+            modifier = Modifier
+                .padding(horizontal = 2.dp)
+                .excludeModuleGestures()
+        ) {
+            DefaultIconControl(
+                icon = Icons.Default.MoreVert,
+                description = "Actions for ${chat.title}",
+                onClick = { menu = true },
+                quiet = true
+            )
+
+            DefaultActionMenu(
+                open = menu,
+                onDismiss = { menu = false }
+            ) {
+                DefaultAction(
+                    text = if (chat.pinned) "Unpin" else "Pin",
+                    onClick = {
+                        onPin()
+                        menu = false
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    icon = VectorIcons.Pin
+                )
+
+                DefaultAction(
+                    text = if (chat.archived) "Unarchive" else "Archive",
+                    onClick = {
+                        onArchive()
+                        menu = false
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    icon = VectorIcons.Download
+                )
             }
         }
     }
