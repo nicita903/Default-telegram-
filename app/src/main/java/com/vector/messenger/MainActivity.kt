@@ -18,8 +18,10 @@ import com.vector.messenger.design.DefaultTheme
 import com.vector.messenger.feature.ChatsViewModel
 import com.vector.messenger.feature.PreferencesViewModel
 import com.vector.messenger.feature.AuthenticationViewModel
+import com.vector.messenger.feature.ProfileViewModel
 import com.vector.messenger.feature.AuthenticationDialog
 import com.vector.messenger.feature.LocalAppearance
+import com.vector.messenger.feature.accessibleAppearance
 import androidx.compose.runtime.CompositionLocalProvider
 import com.vector.messenger.feature.search.SearchViewModel
 import com.vector.messenger.navigation.DefaultApp
@@ -30,6 +32,7 @@ class MainActivity : ComponentActivity() {
     private val chats: ChatsViewModel by viewModels()
     private val preferences: PreferencesViewModel by viewModels()
     private val authentication: AuthenticationViewModel by viewModels()
+    private val profile: ProfileViewModel by viewModels()
     private val search: SearchViewModel by viewModels()
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -46,10 +49,10 @@ class MainActivity : ComponentActivity() {
             }
             var accountOpen by remember { mutableStateOf(false) }
             val appearance by preferences.appearance.collectAsStateWithLifecycle()
-            CompositionLocalProvider(LocalAppearance provides appearance) {
+            CompositionLocalProvider(LocalAppearance provides accessibleAppearance(appearance)) {
             DefaultTheme(ThemeMode.valueOf(theme)) {
                 DefaultApp(chats, preferences, search, onAccount = { accountOpen = true })
-                if (accountOpen) AuthenticationDialog(account, onClose = { accountOpen = false })
+                if (accountOpen) AuthenticationDialog(account, profile, onClose = { accountOpen = false })
             }
             }
         }

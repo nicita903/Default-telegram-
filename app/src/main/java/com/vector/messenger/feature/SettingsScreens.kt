@@ -32,28 +32,31 @@ fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit) {
         Row(Modifier.excludeModuleGestures(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             ThemeMode.entries.forEach { mode -> DefaultAction("${mode.name} theme", { viewModel.theme(mode) }, Modifier.weight(1f), emphasized = theme == mode.name) }
         }
-        Text("Navigation & Gestures", style = MaterialTheme.typography.titleMedium)
+        Text("Module navigation", style = MaterialTheme.typography.titleMedium)
         PreferenceToggle("Swipe and hold navigation", settings.modules, viewModel::moduleGestures)
         SettingStepper("Swipe activation distance", settings.distance, listOf(20, 28, 36, 48, 60), "dp") { value -> viewModel.appearance { it.copy(distance = value) } }
         SettingStepper("Hold duration", settings.hold, listOf(120, 180, 240, 320, 400), "ms") { value -> viewModel.appearance { it.copy(hold = value) } }
         PreferenceToggle("Haptic feedback", settings.haptics) { value -> viewModel.appearance { it.copy(haptics = value) } }
         SettingStepper("Screen zoom intensity", settings.zoom, listOf(0, 3, 5, 8, 10), "%") { value -> viewModel.appearance { it.copy(zoom = value) } }
-        SettingStepper("Animation speed", settings.speed, listOf(50, 75, 100, 125, 150), "%") { value -> viewModel.appearance { it.copy(speed = value) } }
         DefaultRule()
         Text("Search navigation", style = MaterialTheme.typography.titleMedium)
         PreferenceToggle("Pull-down search", settings.pullSearch) { value -> viewModel.appearance { it.copy(pullSearch = value) } }
         SettingStepper("Pull-down activation distance", settings.pullDistance, listOf(48, 60, 72, 96, 120), "dp") { value -> viewModel.appearance { it.copy(pullDistance = value) } }
+        PreferenceToggle("Swipe-down dismissal", settings.dismissSearch) { value -> viewModel.appearance { it.copy(dismissSearch = value) } }
         PreferenceToggle("Fast Chat/Music switching", settings.fastSearch) { value -> viewModel.appearance { it.copy(fastSearch = value) } }
         SettingStepper("Fast-swipe sensitivity", settings.sensitivity, listOf(70, 85, 100, 120, 140), "%") { value -> viewModel.appearance { it.copy(sensitivity = value) } }
         PreferenceToggle("Automatic search locking", settings.autoLock) { value -> viewModel.appearance { it.copy(autoLock = value) } }
         PreferenceToggle("Lock indicator visibility", settings.lockVisible) { value -> viewModel.appearance { it.copy(lockVisible = value) } }
-        PreferenceToggle("Elastic locked-swipe feedback", settings.elastic) { value -> viewModel.appearance { it.copy(elastic = value) } }
+        PreferenceToggle("Lock feedback", settings.elastic) { value -> viewModel.appearance { it.copy(elastic = value) } }
         DefaultRule()
-        Text("Interface", style = MaterialTheme.typography.titleMedium)
-        PreferenceToggle("Compact density", settings.compact) { value -> viewModel.appearance { it.copy(compact = value) } }
-        SettingStepper("Accent color", settings.accent, listOf(0, 1, 2), "", listOf("Electric blue", "Ice blue", "Periwinkle")) { value -> viewModel.appearance { it.copy(accent = value) } }
+        Text("Animations", style = MaterialTheme.typography.titleMedium)
+        SettingStepper("Animation speed", settings.speed, listOf(50, 75, 100, 125, 150), "%") { value -> viewModel.appearance { it.copy(speed = value) } }
         SettingStepper("Animation intensity", settings.intensity, listOf(0, 25, 50, 75, 100), "%") { value -> viewModel.appearance { it.copy(intensity = value) } }
         PreferenceToggle("Reduced motion", settings.reducedMotion) { value -> viewModel.appearance { it.copy(reducedMotion = value) } }
+        DefaultRule()
+        Text("Interface", style = MaterialTheme.typography.titleMedium)
+        SettingStepper("Density", if (settings.compact) 0 else 1, listOf(0, 1), "", listOf("Compact", "Comfortable")) { value -> viewModel.appearance { it.copy(compact = value == 0) } }
+        SettingStepper("Accent color", settings.accent, listOf(0, 1, 2), "", listOf("Electric blue", "Ice blue", "Periwinkle")) { value -> viewModel.appearance { it.copy(accent = value) } }
         SettingStepper("Typography scale", settings.typeScale, listOf(85, 100, 115, 130), "%") { value -> viewModel.appearance { it.copy(typeScale = value) } }
         Text("Pull from the top of Chats to search. Fast swipes change an unlocked search scope; swipe and hold opens modules after release. Search is also available in the module menu.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         DefaultRule()

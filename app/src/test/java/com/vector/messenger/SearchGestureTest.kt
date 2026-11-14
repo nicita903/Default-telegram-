@@ -26,7 +26,7 @@ class SearchGestureTest {
     }
     @Test fun heldOrCancelledGestureCannotProduceReleaseNavigationTwice() {
         val recognizer = VectorGestureRecognizer(GestureThresholds(28f, 8f, 20f, 14f))
-        recognizer.down(); recognizer.move(32f, 0f); recognizer.beginHold(); recognizer.activate()
+        recognizer.down(); recognizer.move(32f, 0f); recognizer.beginHold(0); recognizer.activate(180)
         assertEquals(VectorGestureDirection.Right, recognizer.release())
         assertNull(recognizer.release())
         recognizer.down(); recognizer.move(100f, 0f); recognizer.cancel()

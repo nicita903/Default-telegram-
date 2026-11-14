@@ -2,6 +2,7 @@ package com.vector.messenger.telegram
 
 import android.content.Context
 import com.vector.core.auth.*
+import com.vector.core.profile.*
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -13,9 +14,11 @@ import kotlinx.coroutines.*
 @Module
 @InstallIn(SingletonComponent::class)
 object TelegramModule {
-    @Provides @Singleton fun authentication(@ApplicationContext context: Context): AuthenticationRepository {
-        // Repository state transitions are serialized on Main. JNI receive and initialization run on IO.
-        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-        return DefaultAuthenticationRepository(TdlibClientManager(context, scope), scope)
-    }
+    // Both repositories share one process-owned manager, receive loop and serialized reducer scope.
+    @Provides @Singleton fun telegramScope(): CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    @Provides @Singleton fun client(@ApplicationContext context: Context, scope: CoroutineScope) = TdlibClientManager(context, scope)
+    @Provides @Singleton fun authentication(client: TdlibClientManager, scope: CoroutineScope): AuthenticationRepository =
+        DefaultAuthenticationRepository(client, scope)
+    @Provides @Singleton fun profile(authentication: AuthenticationRepository, client: TdlibClientManager, scope: CoroutineScope): ProfileRepository =
+        DefaultProfileRepository(authentication, client, scope)
 }

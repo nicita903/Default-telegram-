@@ -1,0 +1,42 @@
+{
+  "device": "SM-S9310",
+  "sdk": 36,
+  "build": "debug-instrumented",
+  "label": "before-repeat",
+  "method": "Compose frame-clock replay; Activity FrameMetrics; applied-change batches",
+  "samples": [
+    {
+      "workload": "long_list_scroll",
+      "trial": 0,
+      "appliedChanges": 0,
+      "frames": 185,
+      "totalDurationP50Ms": 7.362534,
+      "totalDurationP95Ms": 12.608862,
+      "deadlineFrames": 185,
+      "missedDeadlineFrames": 69,
+      "droppedMetricReports": 0
+    },
+    {
+      "workload": "long_list_scroll",
+      "trial": 1,
+      "appliedChanges": 0,
+      "frames": 184,
+      "totalDurationP50Ms": 6.63321,
+      "totalDurationP95Ms": 10.30148,
+      "deadlineFrames": 184,
+      "missedDeadlineFrames": 41,
+      "droppedMetricReports": 0
+    },
+    {
+      "workload": "long_list_scroll",
+      "trial": 2,
+      "appliedChanges": 0,
+      "frames": 185,
+      "totalDurationP50Ms": 6.255603,
+      "totalDurationP95Ms": 10.151607,
+      "deadlineFrames": 185,
+      "missedDeadlineFrames": 21,
+      "droppedMetricReports": 0
+    }
+  ]
+}

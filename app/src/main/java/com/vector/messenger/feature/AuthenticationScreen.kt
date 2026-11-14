@@ -25,21 +25,26 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.google.zxing.BarcodeFormat
 import com.google.zxing.qrcode.QRCodeWriter
 import com.vector.core.auth.*
+import com.vector.core.profile.ProfileState
+import com.vector.messenger.design.DefaultAction
+import com.vector.messenger.design.DefaultIconControl
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 @Composable
-fun AuthenticationDialog(viewModel: AuthenticationViewModel, onClose: () -> Unit) {
+fun AuthenticationDialog(viewModel: AuthenticationViewModel, profile: ProfileViewModel, onClose: () -> Unit) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+    val profileState by profile.state.collectAsStateWithLifecycle()
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false, securePolicy = SecureFlagPolicy.SecureOn)) {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
-            AuthenticationContent(state, viewModel::submit, viewModel::start, onClose)
+            AuthenticationContent(state, viewModel::submit, viewModel::start, onClose, profileState, profile::refresh)
         }
     }
 }
 
 @Composable
-internal fun AuthenticationContent(state: AuthState, submit: (AuthAction) -> Unit, start: () -> Unit, onClose: () -> Unit) {
+internal fun AuthenticationContent(state: AuthState, submit: (AuthAction) -> Unit, start: () -> Unit, onClose: () -> Unit,
+    profileState: ProfileState = ProfileState(authenticated = true, loading = true), refreshProfile: () -> Unit = {}) {
     val step = state.step
     // Authentication input is deliberately not rememberSaveable and never enters a SavedStateHandle.
     var input by remember(step) { mutableStateOf("") }
@@ -47,7 +52,7 @@ internal fun AuthenticationContent(state: AuthState, submit: (AuthAction) -> Uni
     Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("Telegram account", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-            IconButton(onClick = { input = ""; onClose() }) { Icon(Icons.Default.Close, "Close account") }
+            DefaultIconControl(Icons.Default.Close, "Close account", { input = ""; onClose() }, quiet = true)
         }
         when (step) {
             AuthStep.Starting -> { CircularProgressIndicator(Modifier.size(28.dp)); Text("Restoring your Telegram session…") }
@@ -99,9 +104,10 @@ internal fun AuthenticationContent(state: AuthState, submit: (AuthAction) -> Uni
                 Text("The code refreshes when Telegram provides a new link. Keep this screen private.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             AuthStep.Ready -> {
-                Text("Signed in to Telegram", style = MaterialTheme.typography.headlineSmall)
-                Text("Your session is restored automatically. Chats in this milestone remain separate demonstration data; Telegram message synchronization is not implemented yet.")
-                OutlinedButton(onClick = { logoutConfirmation = true }, enabled = !state.busy) { Text("Log out") }
+                Text("Signed in to Telegram", style = MaterialTheme.typography.titleMedium)
+                AccountProfileContent(profileState, refreshProfile)
+                Text("Telegram profile · chats remain local demo data.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                DefaultAction("Log out", { logoutConfirmation = true }, enabled = !state.busy)
             }
             AuthStep.LoggingOut -> { CircularProgressIndicator(Modifier.size(28.dp)); Text("Closing your Telegram session… Keep a network connection available to complete logout.") }
             AuthStep.Closed -> { Text("Session closed"); Button(onClick = start) { Text("Sign in again") } }

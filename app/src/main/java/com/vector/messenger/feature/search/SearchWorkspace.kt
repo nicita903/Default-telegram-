@@ -7,11 +7,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.*
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
@@ -43,7 +43,7 @@ import com.vector.messenger.navigation.gesture.excludeModuleGestures
 private val LinkPattern = Regex("https?://\\S+")
 
 @Composable
-fun SearchWorkspace(viewModel: SearchViewModel, scope: SearchScope, blockedAttempt: Int, onScope: (SearchScope) -> Unit, onOpen: (Long) -> Unit) {
+fun SearchWorkspace(viewModel: SearchViewModel, scope: SearchScope, blockedAttempt: Int, onScope: (SearchScope) -> Unit, onOpen: (Long) -> Unit, listState: LazyListState) {
     val appearance = LocalAppearance.current
     val colors = DefaultDesign.colors
     val chatQuery by viewModel.chatQuery.collectAsStateWithLifecycle()
@@ -53,39 +53,48 @@ fun SearchWorkspace(viewModel: SearchViewModel, scope: SearchScope, blockedAttem
     val bump = remember { Animatable(0f) }
     val distance = with(LocalDensity.current) { 8.dp.toPx() } * if (scope == SearchScope.Chats) 1 else -1
     var highlight by remember { mutableStateOf(false) }
-    LaunchedEffect(blockedAttempt) {
-        if (blockedAttempt == 0 || !locked) return@LaunchedEffect
+    var lastBlocked by remember { mutableIntStateOf(blockedAttempt) }
+    LaunchedEffect(blockedAttempt, locked, appearance.reducedMotion, appearance.elastic, appearance.intensity, appearance.speed) {
+        if (blockedAttempt == lastBlocked || !locked || !appearance.elastic) {
+            lastBlocked = blockedAttempt
+            bump.snapTo(0f); highlight = false
+            return@LaunchedEffect
+        }
+        lastBlocked = blockedAttempt
         highlight = true
-        if (appearance.elastic && !appearance.reducedMotion && appearance.intensity > 0) {
-            bump.animateTo(distance * appearance.intensity / 100f, tween(70 * 100 / appearance.speed))
-            bump.animateTo(0f, tween(150 * 100 / appearance.speed))
-        } else kotlinx.coroutines.delay(180)
-        highlight = false
+        try {
+            if (appearance.elastic && VectorMotionSpec.strength(appearance) > 0f) {
+                bump.animateTo(distance * VectorMotionSpec.strength(appearance), VectorMotionSpec.lockPeak(appearance))
+                bump.animateTo(0f, VectorMotionSpec.settle(appearance))
+            } else kotlinx.coroutines.delay(VectorMotionSpec.highlightMillis(appearance))
+        } finally { highlight = false }
     }
-    val lockColor by animateColorAsState(if (highlight) colors.accent else colors.secondary, label = "Search lock feedback")
+    val lockColor by animateColorAsState(if (highlight) colors.accent else colors.secondary, VectorMotionSpec.feedback(appearance), label = "Search lock feedback")
     Column(Modifier.fillMaxSize().background(if (scope == SearchScope.Chats) colors.base else colors.panel)
         .graphicsLayer { translationX = bump.value }.imePadding().testTag("search_workspace")) {
-        Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+        Row(Modifier.fillMaxWidth().searchRegion(SearchRegionKind.Header).padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
             Text(if (scope == SearchScope.Chats) "Chat Search" else "Music Search", color = colors.text,
                 style = MaterialTheme.typography.titleMedium, modifier = Modifier.testTag("search_scope").semantics { heading(); stateDescription = if (locked) "Locked" else "Unlocked" })
-            AnimatedVisibility(locked && appearance.lockVisible) { Icon(Icons.Default.Lock, "Search context locked", Modifier.padding(start = 6.dp).size(12.dp), tint = lockColor) }
+            AnimatedVisibility(locked && appearance.lockVisible, enter = VectorMotionSpec.lockEnter(appearance), exit = VectorMotionSpec.lockExit(appearance)) {
+                Icon(Icons.Default.Lock, "Search context locked", Modifier.padding(start = 6.dp).size(12.dp), tint = lockColor)
+            }
             Spacer(Modifier.weight(1f))
             // Explicit alternative to the fast gesture, also useful for touch exploration.
             DefaultIconControl(if (scope == SearchScope.Chats) VectorIcons.Music else VectorIcons.Chat,
-                if (scope == SearchScope.Chats) "Switch to Music Search" else "Switch to Chat Search", { onScope(if (scope == SearchScope.Chats) SearchScope.Music else SearchScope.Chats) }, quiet = true)
+                if (scope == SearchScope.Chats) "Switch to Music Search" else "Switch to Chat Search", { onScope(if (scope == SearchScope.Chats) SearchScope.Music else SearchScope.Chats) }, Modifier.searchRegion(SearchRegionKind.Excluded), quiet = true)
         }
         DefaultInput(query, { viewModel.query(scope, it) }, if (scope == SearchScope.Chats) "Search conversations" else "Search local music",
-            Modifier.fillMaxWidth().padding(horizontal = 20.dp).excludeModuleGestures().testTag("search_input"), leadingIcon = Icons.Default.Search,
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp).excludeModuleGestures().searchRegion(SearchRegionKind.Excluded).testTag("search_input"), leadingIcon = Icons.Default.Search,
             trailing = if (query.isNotEmpty()) ({ DefaultIconControl(Icons.Default.Close, "Clear search", { viewModel.query(scope, "") }, quiet = true) }) else null,
             surface = if (scope == SearchScope.Music) colors.raised else colors.panel)
         Spacer(Modifier.height(8.dp))
-        if (scope == SearchScope.Chats) ChatSearchResults(viewModel, query, onOpen)
-        else MusicSearchResults(viewModel, query)
+        if (scope == SearchScope.Chats) ChatSearchResults(viewModel, query, listState, onOpen)
+        else MusicSearchResults(viewModel, query, listState)
     }
 }
 
 @Composable
-private fun ChatSearchResults(viewModel: SearchViewModel, query: String, onOpen: (Long) -> Unit) {
+private fun ChatSearchResults(viewModel: SearchViewModel, query: String, listState: LazyListState, onOpen: (Long) -> Unit) {
     val chats by viewModel.chats.collectAsStateWithLifecycle()
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val recents by viewModel.recents.collectAsStateWithLifecycle()
@@ -102,14 +111,14 @@ private fun ChatSearchResults(viewModel: SearchViewModel, query: String, onOpen:
             }
     } }
     SearchChoices(listOf("All", "People", "Conversations", "Messages", "Media", "Files", "Links"), category) { category = it }
-    LazyColumn(Modifier.fillMaxSize().testTag("search_results"), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+    LazyColumn(Modifier.fillMaxSize().searchRegion(SearchRegionKind.Results).testTag("search_results"), state = listState, contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
         item { SearchCaption("Demo repository · not synchronized") }
         if (query.isEmpty()) {
             if (recents.isNotEmpty()) {
-                item { Row(verticalAlignment = Alignment.CenterVertically) { Text("Recent searches", Modifier.weight(1f), color = DefaultDesign.colors.secondary); DefaultIconControl(Icons.Default.Close, "Clear recent searches", viewModel::clearRecent, quiet = true) } }
+                item { Row(verticalAlignment = Alignment.CenterVertically) { Text("Recent searches", Modifier.weight(1f), color = DefaultDesign.colors.secondary); DefaultIconControl(Icons.Default.Close, "Clear recent searches", viewModel::clearRecent, Modifier.searchRegion(SearchRegionKind.Excluded), quiet = true) } }
                 items(recents, key = { "recent:$it" }) { recent -> SearchResultRow(recent, "Recent search", Icons.Default.Search) { viewModel.query(SearchScope.Chats, recent) } }
             }
-            item { Row(Modifier.fillMaxWidth().excludeModuleGestures(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            item { Row(Modifier.fillMaxWidth().excludeModuleGestures().searchRegion(SearchRegionKind.Excluded), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf("New chat", "New group", "New channel").forEach { title -> Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
                     DefaultIconControl(if (title == "New chat") Icons.Default.Person else VectorIcons.Chat, title, { create = title })
                     Text(title, color = DefaultDesign.colors.secondary, style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(top = 4.dp))
@@ -138,7 +147,7 @@ private fun ChatSearchResults(viewModel: SearchViewModel, query: String, onOpen:
 }
 
 @Composable
-private fun MusicSearchResults(viewModel: SearchViewModel, query: String) {
+private fun MusicSearchResults(viewModel: SearchViewModel, query: String, listState: LazyListState) {
     val library by viewModel.library.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
@@ -163,15 +172,15 @@ private fun MusicSearchResults(viewModel: SearchViewModel, query: String) {
             }
         }.let { if (category == "Recently added") it.sortedByDescending { song -> song.added }.take(50) else it }
     }
-    LazyColumn(Modifier.fillMaxSize().testTag("music_results"), contentPadding = PaddingValues(20.dp)) {
+    LazyColumn(Modifier.fillMaxSize().searchRegion(SearchRegionKind.Results).testTag("music_results"), state = listState, contentPadding = PaddingValues(20.dp)) {
         item { SearchCaption("On this device") }
         if (!library.permission) item {
             Text("Allow audio access to search your device library.", color = DefaultDesign.colors.secondary, modifier = Modifier.padding(vertical = 12.dp))
-            DefaultAction("Allow audio access", { permission.launch(MusicLibraryRepository.permission) })
+            DefaultAction("Allow audio access", { permission.launch(MusicLibraryRepository.permission) }, Modifier.searchRegion(SearchRegionKind.Excluded))
         }
         library.error?.let { item { SearchCaption(it) } }
         openError?.let { item { SearchCaption(it) } }
-        if (collection != null) item { DefaultAction("All ${category.lowercase()}", { collection = null }, icon = Icons.AutoMirrored.Filled.ArrowBack) }
+        if (collection != null) item { DefaultAction("All ${category.lowercase()}", { collection = null }, Modifier.searchRegion(SearchRegionKind.Excluded), icon = Icons.AutoMirrored.Filled.ArrowBack) }
         if (library.permission && collection == null && category in listOf("Albums", "Artists", "Playlists")) {
             val names = when (category) {
                 "Albums" -> library.songs.map { it.album }.distinct().map { it to it }
@@ -200,7 +209,7 @@ private fun SearchCaption(text: String) { Text(text, color = DefaultDesign.color
 
 @Composable
 private fun SearchChoices(options: List<String>, selected: String, onSelect: (String) -> Unit) {
-    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).excludeModuleGestures().padding(horizontal = 12.dp)) {
+    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).excludeModuleGestures().searchRegion(SearchRegionKind.Excluded).padding(horizontal = 12.dp)) {
         options.forEach { choice -> Text(choice, color = if (selected == choice) DefaultDesign.colors.accent else DefaultDesign.colors.secondary,
             style = MaterialTheme.typography.labelLarge, modifier = Modifier.heightIn(min = 48.dp).semantics { this.selected = selected == choice }.clickable(role = Role.Tab) { onSelect(choice) }.padding(12.dp)) }
     }

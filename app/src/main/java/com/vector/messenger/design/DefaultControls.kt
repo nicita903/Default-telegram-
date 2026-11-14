@@ -29,6 +29,10 @@ import androidx.compose.ui.window.DialogProperties
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.animation.*
+import androidx.compose.animation.core.MutableTransitionState
+import com.vector.messenger.feature.LocalAppearance
 
 @Composable
 fun DefaultIconControl(
@@ -39,10 +43,14 @@ fun DefaultIconControl(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val focused by interaction.collectIsFocusedAsState()
-    val scale = animateFloatAsState(if (pressed) VectorMotionSpec.pressScale(.92f) else 1f, VectorMotionSpec.scale(), label = "Control compression")
-    val fill by animateColorAsState(if (pressed && emphasized) androidx.compose.ui.graphics.Color(0xFF2679DB) else if (pressed) colors.raised else if (emphasized && enabled) colors.accent else if (quiet) androidx.compose.ui.graphics.Color.Transparent else colors.panel, label = "Control state")
+    val settings = LocalAppearance.current
+    val scale = animateFloatAsState(if (pressed) VectorMotionSpec.pressScale(VectorMotionSpec.ControlPress) else 1f, VectorMotionSpec.press(pressed, settings), label = "Control compression")
+    val fill = animateColorAsState(if (pressed && emphasized) androidx.compose.ui.graphics.Color(0xFF2679DB) else if (pressed) colors.raised else if (emphasized && enabled) colors.accent else if (quiet) androidx.compose.ui.graphics.Color.Transparent else colors.panel, VectorMotionSpec.feedback(settings), label = "Control state")
     Box(modifier.size(DefaultDesign.minimumTarget).graphicsLayer { scaleX = scale.value; scaleY = scale.value }
-        .clip(RoundedCornerShape(DefaultDesign.controlRadius)).background(fill)
+        .clip(RoundedCornerShape(DefaultDesign.controlRadius))
+        // Keep quiet list-row controls on their original paint path. The measured
+        // deferred-color benefit is retained for normal filled controls.
+        .then(if (quiet) Modifier.background(fill.value) else Modifier.drawBehind { drawRect(fill.value) })
         .border(1.dp, if (focused) colors.accent else androidx.compose.ui.graphics.Color.Transparent, RoundedCornerShape(DefaultDesign.controlRadius))
         .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = onClick), contentAlignment = Alignment.Center) {
         Icon(icon, description, Modifier.size(21.dp), tint = if (!enabled) colors.secondary.copy(alpha = .5f) else if (emphasized) colors.base else colors.text)
@@ -58,7 +66,7 @@ fun DefaultAction(
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
     val focused by interaction.collectIsFocusedAsState()
-    val scale = animateFloatAsState(if (pressed) VectorMotionSpec.pressScale(.97f) else 1f, VectorMotionSpec.scale(), label = "Action compression")
+    val scale = animateFloatAsState(if (pressed) VectorMotionSpec.pressScale(VectorMotionSpec.ActionPress) else 1f, VectorMotionSpec.press(pressed, LocalAppearance.current), label = "Action compression")
     Row(modifier.heightIn(min = if (compact) 35.dp else DefaultDesign.minimumTarget).graphicsLayer { scaleX = scale.value; scaleY = scale.value }
         .clip(RoundedCornerShape(DefaultDesign.controlRadius))
         .background(
@@ -88,7 +96,7 @@ fun DefaultInput(
 ) {
     val colors = DefaultDesign.colors
     var focused by remember { mutableStateOf(false) }
-    val frame by animateColorAsState(if (focused) colors.accent else colors.line, label = "Input focus")
+    val frame by animateColorAsState(if (focused) colors.accent else colors.line, VectorMotionSpec.feedback(LocalAppearance.current), label = "Input focus")
     val shape = RoundedCornerShape(28.dp)
     BasicTextField(
         value, onValueChange, singleLine = singleLine, maxLines = maxLines,
@@ -130,9 +138,13 @@ fun DefaultDialog(title: String, onDismiss: () -> Unit, content: @Composable Col
 
 @Composable
 fun DefaultActionMenu(open: Boolean, onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
-    if (open) Popup(alignment = Alignment.TopEnd, onDismissRequest = onDismiss, properties = PopupProperties(focusable = true)) {
+    val settings = LocalAppearance.current
+    val visible = remember { MutableTransitionState(false) }.apply { targetState = open }
+    if (visible.currentState || visible.targetState) Popup(alignment = Alignment.TopEnd, onDismissRequest = onDismiss, properties = PopupProperties(focusable = true)) {
         val colors = DefaultDesign.colors
+        AnimatedVisibility(visibleState = visible, enter = VectorMotionSpec.contextEnter(settings), exit = VectorMotionSpec.contextExit(settings)) {
         Column(Modifier.widthIn(min = 164.dp, max = 240.dp).clip(RoundedCornerShape(DefaultDesign.controlRadius))
             .background(colors.raised).border(1.dp, colors.line, RoundedCornerShape(DefaultDesign.controlRadius)).padding(4.dp)) { content() }
+        }
     }
 }

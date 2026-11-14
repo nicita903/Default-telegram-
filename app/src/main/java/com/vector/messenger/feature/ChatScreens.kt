@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
@@ -36,7 +37,7 @@ import com.vector.messenger.navigation.gesture.PullSearchState
 import com.vector.messenger.navigation.gesture.pullToSearch
 
 @Composable
-fun ChatsScreen(viewModel: ChatsViewModel, onSelect: (Long) -> Unit, onSearch: () -> Unit = {}) {
+fun ChatsScreen(viewModel: ChatsViewModel, onSelect: (Long) -> Unit, onSearch: () -> Unit = {}, listState: LazyListState = rememberLazyListState()) {
     val chats by viewModel.filteredChats.collectAsStateWithLifecycle()
     val allChats by viewModel.chats.collectAsStateWithLifecycle()
     val filter by viewModel.selectedFilter.collectAsStateWithLifecycle()
@@ -44,10 +45,11 @@ fun ChatsScreen(viewModel: ChatsViewModel, onSelect: (Long) -> Unit, onSearch: (
     var selectedChat by rememberSaveable { mutableStateOf<Long?>(null) }
     val colors = DefaultDesign.colors
     val appearance = LocalAppearance.current
-    val listState = rememberLazyListState()
     val pull = remember { PullSearchState() }
     val density = androidx.compose.ui.platform.LocalDensity.current
-    val offset = animateFloatAsState(pull.distance * .45f, VectorMotionSpec.scale(), label = "Search pull")
+    val strength = VectorMotionSpec.strength(appearance)
+    val offset = rememberInteractiveOffset({ pull.distance * .45f * strength }, { pull.eligible })
+    val showingPull by remember { derivedStateOf { pull.distance > 0 } }
     Column(Modifier.fillMaxSize()) {
 
         // Chats header
@@ -124,9 +126,9 @@ fun ChatsScreen(viewModel: ChatsViewModel, onSelect: (Long) -> Unit, onSearch: (
         if (chats.isEmpty()) EmptyState("No conversations", "Try a different search or folder.")
         Box(Modifier.weight(1f).fillMaxWidth().pullToSearch(listState, pull, appearance.pullSearch, appearance.pullDistance, appearance.haptics, onSearch)
             .semantics { customActions = listOf(CustomAccessibilityAction("Open Chat Search") { onSearch(); true }) }) {
-        if (pull.distance > 0) Icon(Icons.Default.Search, "Release to search", Modifier.align(Alignment.TopCenter).padding(top = 8.dp).size(22.dp)
+        if (showingPull) Icon(Icons.Default.Search, "Release to search", Modifier.align(Alignment.TopCenter).padding(top = 8.dp).size(22.dp)
             .graphicsLayer { alpha = (pull.distance / with(density) { appearance.pullDistance.dp.toPx() }).coerceIn(0f, 1f) }, tint = colors.accent)
-        LazyColumn(Modifier.fillMaxSize().graphicsLayer { translationY = if (appearance.reducedMotion) 0f else offset.value * appearance.intensity / 100f }.testTag("chat_list"), state = listState, contentPadding = PaddingValues(bottom = 24.dp)) {
+        LazyColumn(Modifier.fillMaxSize().graphicsLayer { translationY = if (pull.distance > 0) pull.distance * .45f * strength else offset.value }.testTag("chat_list"), state = listState, contentPadding = PaddingValues(bottom = 24.dp)) {
             items(chats, key = { it.id }, contentType = { "chat" }) { chat ->
                 ChatRow(chat, selectedChat == chat.id,
                     { selectedChat = chat.id; onSelect(chat.id) }, { viewModel.pin(chat.id) }, { viewModel.archive(chat.id) })
@@ -150,8 +152,8 @@ private fun ChatRow(chat: Chat, selected: Boolean, onClick: () -> Unit, onPin: (
     val colors = DefaultDesign.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val fill by animateColorAsState(if (pressed) colors.raised else if (selected) colors.panel else colors.base, label = "Conversation selection")
-    val scale = animateFloatAsState(if (pressed) VectorMotionSpec.pressScale(.994f) else 1f, VectorMotionSpec.scale(), label = "Conversation compression")
+    val fill by animateColorAsState(if (pressed) colors.raised else if (selected) colors.panel else colors.base, VectorMotionSpec.feedback(LocalAppearance.current), label = "Conversation selection")
+    val scale = animateFloatAsState(if (pressed) VectorMotionSpec.pressScale(VectorMotionSpec.RowPress) else 1f, VectorMotionSpec.press(pressed, LocalAppearance.current), label = "Conversation compression")
     Row(Modifier.fillMaxWidth().graphicsLayer { scaleX = scale.value; scaleY = scale.value }
         .background(fill).semantics { this.selected = selected }
         .clickable(interactionSource = interaction, indication = null, onClick = onClick).heightIn(min = if (LocalAppearance.current.compact) 72.dp else 88.dp), verticalAlignment = Alignment.CenterVertically) {

@@ -3,6 +3,7 @@ package com.vector.messenger.navigation
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.*
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
@@ -30,23 +31,38 @@ import kotlinx.coroutines.launch
 import com.vector.messenger.feature.search.*
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.platform.LocalView
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search: SearchViewModel, onAccount: () -> Unit = {}) {
     val navigation = rememberVectorNavigationController()
     // Keep the six controllers above the active content: switching modules does not reset stacks.
     val controllers = AppModule.entries.associateWith { key(it) { rememberNavController() } }
-    val nav = controllers.getValue(navigation.module)
+    // Search opened from another module can reveal Chats without recording a module visit.
+    // The first subsequent module Back returns to the unchanged visit-history head.
+    var transientChats by rememberSaveable { mutableStateOf(false) }
+    val displayedModule = if (transientChats) AppModule.Chats else navigation.module
+    val nav = controllers.getValue(displayedModule)
     val entry by nav.currentBackStackEntryAsState()
     val route = entry?.destination?.route
     val conversation = route == Routes.Conversation
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var searchScopeName by rememberSaveable { mutableStateOf(SearchScope.Chats.name) }
     val searchScope = SearchScope.valueOf(searchScopeName)
-    val searchVisible = searchOpen && navigation.module == AppModule.Chats && !conversation
-    val appearance by preferences.appearance.collectAsStateWithLifecycle()
-    val travel = if (appearance.reducedMotion) 0f else appearance.intensity / 100f
+    val searchVisible = searchOpen && displayedModule == AppModule.Chats && !conversation
+    val searchVisibility = remember { MutableTransitionState(false) }.apply { targetState = searchVisible }
+    val searchOwnsInput = searchVisible || searchVisibility.currentState || searchVisibility.targetState
+    val keyboard = LocalSoftwareKeyboardController.current
+    val focusManager = LocalFocusManager.current
+    val view = LocalView.current
+    fun closeSearch() { keyboard?.hide(); focusManager.clearFocus(); searchOpen = false }
+    val appearance = LocalAppearance.current
     val chatQuery by search.chatQuery.collectAsStateWithLifecycle()
     val musicQuery by search.musicQuery.collectAsStateWithLifecycle()
     var blockedAttempt by remember { mutableIntStateOf(0) }
@@ -55,7 +71,7 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
         if (target == searchScope) return
         if (searchLocked(if (searchScope == SearchScope.Chats) chatQuery else musicQuery, appearance.autoLock)) {
             blockedAttempt++
-            if (appearance.haptics) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+            if (appearance.haptics && appearance.elastic) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
         } else { searchScopeName = target.name; if (appearance.haptics) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) }
     }
     val gestureConfig = VectorGestureConfig(distance = appearance.distance.dp, holdMillis = appearance.hold.toLong())
@@ -63,23 +79,36 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
     val contact = allChats.find { it.id == entry?.arguments?.getLong("chatId") }
     val gesture = remember { VectorGestureController() }
     val exclusions = remember { GestureExclusions() }
-    val gesturesEnabled by preferences.moduleGestures.collectAsStateWithLifecycle()
     val touchExploration = rememberTouchExplorationEnabled()
     var menu by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val holder = rememberSaveableStateHolder()
-    val gestureEnabled = gesturesEnabled && !touchExploration && !menu
-    val gestureScope = "${navigation.module}:${route}"
-    val scale = animateFloatAsState(if (gesture.activated && !appearance.reducedMotion) 1f - appearance.zoom / 100f * appearance.intensity / 100f else 1f, VectorMotionSpec.scale(), label = "Module gesture scale")
+    val modulePolicy: () -> GestureCancelReason = {
+        moduleGestureEligibility(
+            enabled = preferences.appearance.value.modules,
+            searchActive = searchOwnsInput || (searchOpen && (transientChats || navigation.module == AppModule.Chats) &&
+                controllers.getValue(AppModule.Chats).currentBackStackEntry?.destination?.route != Routes.Conversation),
+            modalOpen = menu,
+            touchExploration = touchExploration,
+        )
+    }
+    val gestureScope = "$displayedModule:${entry?.id}:$route:$searchVisible:${appearance.modules}:$touchExploration:$menu"
+    val scale = animateFloatAsState(VectorMotionSpec.surfaceScale(gesture.activated, appearance), VectorMotionSpec.scale(), label = "Module gesture scale")
     fun previousModule() {
-        if (!navigation.previous()) scope.launch { snackbar.showSnackbar("No previous module", duration = SnackbarDuration.Short) }
+        if (transientChats) transientChats = false
+        else if (!navigation.previous()) scope.launch { snackbar.showSnackbar("No previous module", duration = SnackbarDuration.Short) }
     }
     val release: (VectorGestureDirection) -> Unit = { direction ->
-        if (direction == VectorGestureDirection.Right) menu = true else previousModule()
+        // Read live policy too: a state change can precede the next composition/input restart.
+        if (modulePolicy() == GestureCancelReason.None) {
+            if (direction == VectorGestureDirection.Right) menu = true else previousModule()
+        }
     }
     CompositionLocalProvider(LocalGestureExclusions provides exclusions) {
-        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
+            .vectorModuleGestures(gesture, modulePolicy, release, config = gestureConfig, haptics = appearance.haptics,
+                enabled = !searchOwnsInput, scopeKey = gestureScope)) {
             Scaffold(
                 modifier = Modifier.graphicsLayer { scaleX = scale.value; scaleY = scale.value },
                 containerColor = MaterialTheme.colorScheme.background,
@@ -88,59 +117,54 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                 topBar = {
                     val internalBack = nav.previousBackStackEntry != null
                     DefaultHeader(
-                        title = if (conversation) contact?.title ?: "Conversation" else if (navigation.module == AppModule.Chats) "Default" else navigation.module.label,
-                        subtitle = if (conversation) "Sample conversation" else if (searchVisible) "Search workspace" else if (navigation.module == AppModule.Chats) "Demo chats · not synchronized" else "",
+                        title = if (conversation) contact?.title ?: "Conversation" else if (displayedModule == AppModule.Chats) "Default" else displayedModule.label,
+                        subtitle = if (conversation) "Sample conversation" else if (searchVisible) "Search workspace" else if (displayedModule == AppModule.Chats) "Demo chats · not synchronized" else "",
                         avatarName = if (conversation) contact?.title else null,
                         navigationIcon = if (internalBack || searchVisible) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
-                        navigationDescription = if (searchVisible) "Close search" else if (!internalBack) "Open navigation" else if (conversation && navigation.module == AppModule.Contacts) "Back to contacts" else if (conversation) "Back to chats" else "Back within module",
-                        onNavigation = { if (searchVisible) searchOpen = false else if (internalBack) nav.popBackStack() else menu = true },
+                        navigationDescription = if (searchVisible) "Close search" else if (!internalBack) "Open navigation" else if (conversation && displayedModule == AppModule.Contacts) "Back to contacts" else if (conversation) "Back to chats" else "Back within module",
+                        onNavigation = { if (searchVisible) closeSearch() else if (internalBack) nav.popBackStack() else menu = true },
                         onMenu = if (internalBack || searchVisible) ({ menu = true }) else null,
-                        titleModifier = Modifier.vectorModuleGestures(gesture, gestureEnabled, release, config = gestureConfig, haptics = appearance.haptics, scopeKey = gestureScope).testTag("header_gesture_surface"),
+                        titleModifier = Modifier.moduleGestureSurface(gesture, ModuleGestureSurface.Header).testTag("header_gesture_surface"),
                     )
                 },
             ) { padding ->
                 Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)
-                    .vectorModuleGestures(gesture, gestureEnabled, release, config = gestureConfig, haptics = appearance.haptics,
-                        fastSearch = searchVisible && appearance.fastSearch && !touchExploration && !menu,
-                        fastSensitivity = appearance.sensitivity, onFastSwipe = { direction ->
-                            if (direction == VectorGestureDirection.Right && searchScope == SearchScope.Chats) switchSearch(SearchScope.Music)
-                            else if (direction == VectorGestureDirection.Left && searchScope == SearchScope.Music) switchSearch(SearchScope.Chats)
-                        }, scopeKey = "$gestureScope:$searchVisible:$searchScope").testTag("module_gesture_surface")) {
+                    .moduleGestureSurface(gesture, ModuleGestureSurface.Content).testTag("module_gesture_surface")) {
                     AnimatedContent(
-                        targetState = navigation.module,
+                        targetState = displayedModule,
                         transitionSpec = {
-                            val sign = if (navigation.backwards) -1 else 1
-                            (fadeIn(VectorMotionSpec.transition(appearance)) + slideInHorizontally(VectorMotionSpec.transition(appearance)) { (sign * it / 12 * travel).toInt() }) togetherWith
-                                (fadeOut(VectorMotionSpec.transition(appearance)) + slideOutHorizontally(VectorMotionSpec.transition(appearance)) { (-sign * it / 12 * travel).toInt() })
+                            VectorMotionSpec.moduleTransition(navigation.backwards, appearance).using(null)
                         }, label = "Module transition",
                     ) { module ->
                         holder.SaveableStateProvider(module.name) {
-                            AnimatedContent(module == AppModule.Chats && searchVisible, transitionSpec = {
-                                (fadeIn(VectorMotionSpec.transition(appearance)) + slideInVertically(VectorMotionSpec.transition(appearance)) { (it / 10 * travel).toInt() }) togetherWith
-                                    fadeOut(VectorMotionSpec.transition(appearance))
-                            }, label = "Pull search expansion") { searching ->
-                            if (searching) {
-                                AnimatedContent(searchScope, transitionSpec = {
-                                    val sign = if (targetState == SearchScope.Music) 1 else -1
-                                    (fadeIn(VectorMotionSpec.transition(appearance)) + slideInHorizontally(VectorMotionSpec.transition(appearance)) { (sign * it / 8 * travel).toInt() }) togetherWith
-                                        (fadeOut(VectorMotionSpec.transition(appearance)) + slideOutHorizontally(VectorMotionSpec.transition(appearance)) { (-sign * it / 8 * travel).toInt() })
-                                }, label = "Search scope") { selected ->
-                                    holder.SaveableStateProvider("search:${selected.name}") { SearchWorkspace(search, selected, blockedAttempt, ::switchSearch) { id ->
-                                        searchOpen = false; chats.open(id); controllers.getValue(AppModule.Chats).navigate(Routes.conversation(id)) { launchSingleTop = true }
-                                    } }
+                            Box(Modifier.fillMaxSize()) {
+                                // Keep the same Chats entry/list alive underneath Search.
+                                Box(Modifier.fillMaxSize().then(if (module == AppModule.Chats && searchOwnsInput) Modifier.clearAndSetSemantics {} else Modifier)) {
+                                    VectorNavigationHost(module, controllers.getValue(module), chats, preferences,
+                                        onPrivacy = { transientChats = false; navigation.select(AppModule.Privacy) }, onSearch = { searchScopeName = SearchScope.Chats.name; searchOpen = true })
                                 }
-                            } else VectorNavigationHost(module, controllers.getValue(module), chats, preferences, onPrivacy = { navigation.select(AppModule.Privacy) }, onSearch = { searchScopeName = SearchScope.Chats.name; searchOpen = true })
+                                if (module == AppModule.Chats) SearchOverlay(searchVisibility, searchVisible && !menu && !touchExploration,
+                                    search, searchScope, blockedAttempt, ::switchSearch, ::closeSearch) { id ->
+                                    closeSearch(); chats.open(id); controllers.getValue(AppModule.Chats).navigate(Routes.conversation(id)) { launchSingleTop = true }
+                                }
                             }
                         }
                     }
                 }
             }
             // System Back pops an internal screen first, then visit history. At the first root Android exits.
-            BackHandler(enabled = !menu && (searchVisible || nav.previousBackStackEntry != null || navigation.history.canGoBack)) {
-                if (searchVisible) searchOpen = false else if (nav.previousBackStackEntry != null) nav.popBackStack() else previousModule()
+            BackHandler(enabled = !menu && (searchVisible || transientChats || nav.previousBackStackEntry != null || navigation.history.canGoBack)) {
+                if (searchVisible) {
+                    // Query the current platform state in the callback, not a Boolean captured
+                    // before the IME's asynchronous hide animation/insets delivery.
+                    if (ViewCompat.getRootWindowInsets(view)?.isVisible(WindowInsetsCompat.Type.ime()) == true) {
+                        keyboard?.hide(); focusManager.clearFocus()
+                    } else closeSearch()
+                } else if (nav.previousBackStackEntry != null) nav.popBackStack() else previousModule()
             }
-            VectorModuleMenu(menu, navigation.module, onDismiss = { menu = false }, onSelect = { navigation.select(it); menu = false }, onAccount = { menu = false; onAccount() }, onSearch = {
-                navigation.select(AppModule.Chats); controllers.getValue(AppModule.Chats).popBackStack(AppModule.Chats.name, false)
+            VectorModuleMenu(menu, displayedModule, onDismiss = { menu = false }, onSelect = { transientChats = false; navigation.select(it); menu = false }, onAccount = { menu = false; onAccount() }, onSearch = {
+                if (displayedModule != AppModule.Chats) transientChats = true
+                controllers.getValue(AppModule.Chats).popBackStack(AppModule.Chats.name, false)
                 searchScopeName = SearchScope.Chats.name; searchOpen = true; menu = false
             })
             // Also cover a quick Back before the dialog window has acquired input focus.
@@ -161,7 +185,9 @@ private fun VectorNavigationHost(
     val appearance = LocalAppearance.current
     val allChats by chats.chats.collectAsStateWithLifecycle()
     NavHost(navController = nav, startDestination = module.name,
-        enterTransition = { fadeIn(VectorMotionSpec.transition(appearance)) }, exitTransition = { fadeOut(VectorMotionSpec.transition(appearance)) }) {
+        enterTransition = { VectorMotionSpec.screenEnter(appearance) }, exitTransition = { VectorMotionSpec.screenExit(appearance) },
+        popEnterTransition = { VectorMotionSpec.screenEnter(appearance, backwards = true) },
+        popExitTransition = { VectorMotionSpec.screenExit(appearance, backwards = true) }) {
         when (module) {
             AppModule.Chats, AppModule.Contacts -> {
                 composable(module.name) {

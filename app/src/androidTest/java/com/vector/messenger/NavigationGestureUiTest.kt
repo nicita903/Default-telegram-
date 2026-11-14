@@ -10,6 +10,7 @@ import org.junit.Rule
 import org.junit.Test
 import org.junit.Before
 import org.junit.After
+import com.vector.messenger.navigation.gesture.*
 
 class NavigationGestureUiTest {
     @get:Rule val compose = createAndroidComposeRule<MainActivity>()
@@ -153,5 +154,37 @@ class NavigationGestureUiTest {
         openModule("Music")
         openModule("Ghost Mode")
         compose.onNodeWithText("Hide last seen · Daniel").assertIsDisplayed()
+    }
+    @Test fun debugDiagnosticsReportActivationCancellationAndExactlyOneNavigation() {
+        val events = java.util.concurrent.CopyOnWriteArrayList<GestureDiagnosticEvent>()
+        GestureDiagnostics.enabled = true
+        GestureDiagnostics.observer = { events += it }
+        try {
+            beginHold()
+            assertEquals(1, events.count { it.state == VectorGestureState.Activated })
+            assertEquals(0, events.count { it.navigationAction == GestureNavigationAction.OpenModules })
+            header.performTouchInput { up() }
+            compose.onNodeWithContentDescription("Close navigation").performClick()
+            header.performTouchInput { down(center); moveBy(Offset(distance, 0f)); up() }
+            compose.waitForIdle()
+            assertEquals(1, events.count { it.navigationAction == GestureNavigationAction.OpenModules })
+            org.junit.Assert.assertTrue(events.any { it.cancellation == GestureCancelReason.EarlyRelease })
+            org.junit.Assert.assertTrue(events.all { it.thresholdDp == 28f && it.holdMillis == 180L })
+            openChatSearch(compose)
+            header.performTouchInput { down(center); moveBy(Offset(distance, 0f)) }
+            Thread.sleep(230)
+            header.performTouchInput { up() }
+            org.junit.Assert.assertTrue(events.any { it.cancellation == GestureCancelReason.SearchActive })
+            assertEquals(1, events.count { it.navigationAction == GestureNavigationAction.OpenModules })
+        } finally { GestureDiagnostics.observer = null; GestureDiagnostics.enabled = false }
+    }
+    @Test fun headerInnerBoundaryIsNotTreatedAsTheAndroidSystemEdge() {
+        val inset = with(compose.density) { 4.dp.toPx() }
+        val exact = with(compose.density) { 28.dp.toPx() }
+        header.performTouchInput { down(Offset(inset, center.y)); moveBy(Offset(exact, 0f)) }
+        compose.waitUntil(3000) { header.fetchSemanticsNode().config[SemanticsProperties.StateDescription] == "Activated" }
+        compose.onNodeWithContentDescription("Close navigation").assertDoesNotExist()
+        header.performTouchInput { up() }
+        compose.onNodeWithContentDescription("Close navigation").assertIsDisplayed()
     }
 }

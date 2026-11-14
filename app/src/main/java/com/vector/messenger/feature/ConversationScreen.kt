@@ -157,7 +157,7 @@ private fun MessageBubble(message: Message, reply: Message?, grouped: Boolean,
     val outgoing = message.delivery == Delivery.LocalDemo
     val colors = DefaultDesign.colors
     var drag by remember { mutableFloatStateOf(0f) }
-    val translation = animateFloatAsState(drag, VectorMotionSpec.scale(), label = "Swipe to reply")
+    val translation = animateFloatAsState(drag, VectorMotionSpec.replyFollow(LocalAppearance.current), label = "Swipe to reply")
     val replyDistance = with(LocalDensity.current) { 48.dp.toPx() }
     val currentReply by rememberUpdatedState(onReply)
     val shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomEnd = if (outgoing && !grouped) 5.dp else 18.dp, bottomStart = if (!outgoing && !grouped) 5.dp else 18.dp)

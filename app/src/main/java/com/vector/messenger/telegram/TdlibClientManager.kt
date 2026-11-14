@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.util.Base64
 import com.vector.core.auth.*
+import com.vector.core.profile.*
 import java.io.File
 import java.util.Locale
 import java.util.concurrent.ConcurrentHashMap
@@ -11,18 +12,32 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.*
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.receiveAsFlow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asSharedFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.drinkless.tdlib.JsonClient
 import org.json.JSONObject
 
 /** One process-owned TDLib client and exactly one blocking receive loop. Composables never access JNI. */
-class TdlibClientManager(private val context: Context, private val scope: CoroutineScope) : TelegramAuthClient {
+class TdlibClientManager(private val context: Context, private val scope: CoroutineScope) : TelegramAuthClient, TelegramProfileClient {
     private val events = Channel<AuthStep>(Channel.UNLIMITED)
     override val steps = events.receiveAsFlow()
     private val lifecycle = Mutex()
     private val ids = AtomicLong()
-    private val pending = ConcurrentHashMap<Long, CompletableDeferred<JSONObject>>()
+    private class Pending(val result: CompletableDeferred<JSONObject>, val type: String, val epoch: Long, val profileRevision: Long)
+    private val pending = ConcurrentHashMap<Long, Pending>()
+    private val profileEvents = MutableSharedFlow<ProfileUpdate>(extraBufferCapacity = 64)
+    override val profileUpdates = profileEvents.asSharedFlow()
+    private val connectionState = MutableStateFlow(ProfileConnection.Connecting)
+    override val connection = connectionState.asStateFlow()
+    @Volatile private var authorized = false
+    @Volatile private var sessionEpoch = 0L
+    @Volatile private var profileRevision = 0L
+    private var selfId = 0L // Mutated only by the existing receive loop.
+    private var selfPhotoId = 0
     private val vault = TdlibKeyVault(context)
     private val database = File(context.noBackupFilesDir, "telegram/database")
     private val files = File(context.noBackupFilesDir, "telegram/files")
@@ -53,9 +68,30 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                         val json = JSONObject(raw)
                         if (json.optInt("@client_id") != id) continue
                         val extra = json.optLong("@extra", -1)
-                        if (extra != -1L) { pending.remove(extra)?.complete(json); continue }
+                        if (extra != -1L) {
+                            pending.remove(extra)?.let { waiting ->
+                                if (waiting.type == "getMe" && waiting.epoch == sessionEpoch && authorized &&
+                                    (selfId == 0L || waiting.profileRevision == profileRevision) && json.optString("@type") == "user") {
+                                    publishCurrentUser(json)
+                                }
+                                waiting.result.complete(json)
+                            }
+                            continue
+                        }
+                        when (json.optString("@type")) {
+                            "updateUser" -> json.optJSONObject("user")?.let { user ->
+                                if (authorized && selfId != 0L && user.optLong("id") == selfId) publishCurrentUser(user)
+                            }
+                            "updateFile" -> json.optJSONObject("file")?.let { file ->
+                                if (authorized && selfPhotoId != 0 && file.optInt("id") == selfPhotoId)
+                                    mapProfileFile(file, files)?.let { profileEvents.emit(ProfileUpdate.Photo(it)) }
+                            }
+                            "updateConnectionState" -> connectionState.value = mapProfileConnection(json.optJSONObject("state") ?: JSONObject())
+                        }
                         if (json.optString("@type") != "updateAuthorizationState") continue
                         val auth = json.getJSONObject("authorization_state")
+                        authorized = auth.optString("@type") == "authorizationStateReady"
+                        if (!authorized) { sessionEpoch++; selfId = 0; selfPhotoId = 0 }
                         when (auth.optString("@type")) {
                             "authorizationStateLoggingOut" -> { logoutConfirmed = true; events.send(AuthStep.LoggingOut) }
                             "authorizationStateReady" -> { logoutConfirmed = false; events.send(AuthStep.Ready) }
@@ -63,7 +99,7 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                             "authorizationStateClosed" -> {
                                 lifecycle.withLock {
                                     clientId = 0
-                                    pending.values.forEach { it.cancel() }; pending.clear()
+                                    pending.values.forEach { it.result.cancel() }; pending.clear()
                                     if (logoutConfirmed) {
                                         try { vault.clearAfterLogout() }
                                         catch (_: Exception) { events.send(AuthStep.SetupRequired("Logout completed, but local key cleanup failed. Restart the app before signing in again.")); return@launch }
@@ -115,10 +151,44 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
         catch (_: Exception) { AuthFailure.Unavailable }
     }
 
+    private suspend fun publishCurrentUser(json: JSONObject) {
+        // A malformed optional profile must never terminate the authentication receive loop.
+        val profile = try { mapProfile(json, files) } catch (_: Exception) { return }
+        selfId = profile.id; selfPhotoId = profile.photo?.fileId ?: 0; profileRevision++
+        profileEvents.emit(ProfileUpdate.CurrentUser(profile))
+    }
+
+    override suspend fun getMe(): TelegramProfile = profileRequest {
+        mapProfile(checkedProfileRequest(request("getMe")), files)
+    }
+
+    override suspend fun downloadPhoto(fileId: Int): ProfilePhoto = profileRequest {
+        require(fileId > 0)
+        mapProfileFile(checkedProfileRequest(request("downloadFile", "file_id" to fileId, "priority" to 1,
+            "offset" to 0, "limit" to 0, "synchronous" to false)), files)
+            ?: throw ProfileRequestException(ProfileFailure.Unavailable)
+    }
+
+    private suspend fun checkedProfileRequest(payload: JSONObject): JSONObject {
+        if (!authorized || clientId == 0) throw ProfileRequestException(ProfileFailure.Unavailable)
+        val result = send(payload)
+        if (result.optString("@type") == "error") throw ProfileRequestException(
+            if (mapTdlibFailure(result) == AuthFailure.Network) ProfileFailure.Network else ProfileFailure.Unavailable)
+        return result
+    }
+
+    private suspend fun <T> profileRequest(block: suspend () -> T): T = withContext(Dispatchers.IO) {
+        try { block() }
+        catch (_: TimeoutCancellationException) { throw ProfileRequestException(ProfileFailure.Network) }
+        catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: ProfileRequestException) { throw failure }
+        catch (_: Exception) { throw ProfileRequestException(ProfileFailure.Unavailable) }
+    }
+
     private suspend fun send(payload: JSONObject): JSONObject {
         val id = ids.incrementAndGet()
         val deferred = CompletableDeferred<JSONObject>()
-        pending[id] = deferred
+        pending[id] = Pending(deferred, payload.optString("@type"), sessionEpoch, profileRevision)
         return try {
             JsonClient.send(clientId, payload.put("@extra", id).toString())
             withTimeout(45_000) { deferred.await() }

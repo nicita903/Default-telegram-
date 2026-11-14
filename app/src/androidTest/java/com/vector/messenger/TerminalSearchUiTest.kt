@@ -80,20 +80,34 @@ class TerminalSearchUiTest {
         compose.onNodeWithContentDescription("Search context locked").assertDoesNotExist()
         fast(true)
         compose.onNodeWithText("Music Search").assertIsDisplayed()
-        InstrumentationRegistry.getInstrumentation().sendKeyDownUpSync(android.view.KeyEvent.KEYCODE_BACK)
+        compose.onNodeWithContentDescription("Close search").performClick()
         compose.onNodeWithTag("chat_list").assertIsDisplayed()
     }
-    @Test fun holdInSearchActivatesModuleNavigationWithoutFastSwitching() {
+    @Test fun searchExcludesModuleHoldsOnBothContentAndHeader() {
         openChatSearch(compose)
         val distance = with(compose.density) { 32.dp.toPx() }
         val workspace = compose.onNodeWithTag("search_workspace")
         workspace.performTouchInput { down(Offset(width * .35f, height * .65f)); moveBy(Offset(distance, 0f)) }
-        compose.waitUntil(3000) { compose.onNodeWithTag("header_gesture_surface").fetchSemanticsNode().config.getOrElse(SemanticsProperties.StateDescription) { "" } == "Activated" }
+        Thread.sleep(250)
+        Assert.assertEquals("Idle", compose.onNodeWithTag("header_gesture_surface").fetchSemanticsNode().config[SemanticsProperties.StateDescription])
         compose.onNodeWithText("Chat Search").assertIsDisplayed()
         compose.onNodeWithContentDescription("Close navigation").assertDoesNotExist()
         workspace.performTouchInput { up() }
-        compose.onNodeWithContentDescription("Close navigation").assertIsDisplayed()
+        compose.onNodeWithContentDescription("Close navigation").assertDoesNotExist()
         compose.onNodeWithText("Music Search").assertDoesNotExist()
+        val header = compose.onNodeWithTag("header_gesture_surface")
+        for (sign in listOf(1, -1)) {
+            header.performTouchInput { down(center); moveBy(Offset(sign * distance, 0f)) }
+            Thread.sleep(250)
+            header.performTouchInput { up() }
+            compose.onNodeWithText("Chat Search").assertIsDisplayed()
+            compose.onNodeWithContentDescription("Close navigation").assertDoesNotExist()
+        }
+        compose.onNodeWithContentDescription("Close search").performClick()
+        header.performTouchInput { down(center); moveBy(Offset(distance, 0f)) }
+        compose.waitUntil(3000) { header.fetchSemanticsNode().config[SemanticsProperties.StateDescription] == "Activated" }
+        header.performTouchInput { up() }
+        compose.onNodeWithContentDescription("Close navigation").assertIsDisplayed()
     }
     @Test fun blockedFastSwipeMovesAtMostEightDpAndReturns() {
         openChatSearch(compose)

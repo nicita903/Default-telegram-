@@ -1,0 +1,141 @@
+{
+  "device": "SM-S9310",
+  "sdk": 36,
+  "build": "debug-instrumented",
+  "label": "before-repeat",
+  "method": "Compose frame-clock replay; Activity FrameMetrics; applied-change batches",
+  "samples": [
+    {
+      "workload": "chats_pull_cancel",
+      "trial": 0,
+      "appliedChanges": 20,
+      "frames": 36,
+      "totalDurationP50Ms": 2.941888,
+      "totalDurationP95Ms": 3.230659,
+      "deadlineFrames": 36,
+      "missedDeadlineFrames": 0,
+      "droppedMetricReports": 0
+    },
+    {
+      "workload": "icon_press_cancel",
+      "trial": 0,
+      "appliedChanges": 27,
+      "frames": 9,
+      "totalDurationP50Ms": 3.562431,
+      "totalDurationP95Ms": 9.040333,
+      "deadlineFrames": 9,
+      "missedDeadlineFrames": 2,
+      "droppedMetricReports": 0
+    },
+    {
+      "workload": "search_pull_cancel",
+      "trial": 0,
+      "appliedChanges": 19,
+      "frames": 18,
+      "totalDurationP50Ms": 5.026935,
+      "totalDurationP95Ms": 11.252459,
+      "deadlineFrames": 18,
+      "missedDeadlineFrames": 4,
+      "droppedMetricReports": 0
+    },
+    {
+      "workload": "module_search_roundtrip",
+      "trial": 0,
+      "appliedChanges": 71,
+      "frames": 7,
+      "totalDurationP50Ms": 42.78604,
+      "totalDurationP95Ms": 72.736172,
+      "deadlineFrames": 7,
+      "missedDeadlineFrames": 7,
+      "droppedMetricReports": 0
+    },
+    {
+      "workload": "chats_pull_cancel",
+      "trial": 1,
+      "appliedChanges": 20,
+      "frames": 36,
+      "totalDurationP50Ms": 3.463061,
+      "totalDurationP95Ms": 5.925217,
+      "deadlineFrames": 36,
+      "missedDeadlineFrames": 0,
+      "droppedMetricReports": 0
+    },
+    {
+      "workload": "icon_press_cancel",
+      "trial": 1,
+      "appliedChanges": 27,
+      "frames": 9,
+      "totalDurationP50Ms": 6.212702,
+      "totalDurationP95Ms": 9.616254,
+      "deadlineFrames": 9,
+      "missedDeadlineFrames": 3,
+      "droppedMetricReports": 0
+    },
+    {
+      "workload": "search_pull_cancel",
+      "trial": 1,
+      "appliedChanges": 19,
+      "frames": 18,
+      "totalDurationP50Ms": 6.235273,
+      "totalDurationP95Ms": 9.445445,
+      "deadlineFrames": 18,
+      "missedDeadlineFrames": 3,
+      "droppedMetricReports": 0
+    },
+    {
+      "workload": "module_search_roundtrip",
+      "trial": 1,
+      "appliedChanges": 71,
+      "frames": 7,
+      "totalDurationP50Ms": 48.217459,
+      "totalDurationP95Ms": 73.235372,
+      "deadlineFrames": 7,
+      "missedDeadlineFrames": 7,
+      "droppedMetricReports": 0
+    },
+    {
+      "workload": "chats_pull_cancel",
+      "trial": 2,
+      "appliedChanges": 20,
+      "frames": 36,
+      "totalDurationP50Ms": 3.418201,
+      "totalDurationP95Ms": 4.10694,
+      "deadlineFrames": 36,
+      "missedDeadlineFrames": 0,
+      "droppedMetricReports": 0
+    },
+    {
+      "workload": "icon_press_cancel",
+      "trial": 2,
+      "appliedChanges": 27,
+      "frames": 9,
+      "totalDurationP50Ms": 3.676695,
+      "totalDurationP95Ms": 7.33929,
+      "deadlineFrames": 9,
+      "missedDeadlineFrames": 0,
+      "droppedMetricReports": 0
+    },
+    {
+      "workload": "search_pull_cancel",
+      "trial": 2,
+      "appliedChanges": 19,
+      "frames": 18,
+      "totalDurationP50Ms": 6.507451,
+      "totalDurationP95Ms": 8.828825,
+      "deadlineFrames": 18,
+      "missedDeadlineFrames": 4,
+      "droppedMetricReports": 0
+    },
+    {
+      "workload": "module_search_roundtrip",
+      "trial": 2,
+      "appliedChanges": 71,
+      "frames": 7,
+      "totalDurationP50Ms": 37.678472,
+      "totalDurationP95Ms": 81.045739,
+      "deadlineFrames": 7,
+      "missedDeadlineFrames": 7,
+      "droppedMetricReports": 0
+    }
+  ]
+}

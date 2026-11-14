@@ -31,42 +31,42 @@ class VectorNavigationTest {
         assertEquals(VectorGestureState.Tracking, machine.state)
         machine.move(28f, 0f)
         assertEquals(VectorGestureState.ThresholdReached, machine.state)
-        machine.beginHold()
-        assertTrue(machine.activate())
-        assertFalse(machine.activate()) // Only one activation/haptic per sequence.
+        machine.beginHold(0)
+        assertTrue(machine.activate(180))
+        assertFalse(machine.activate(180)) // Only one activation/haptic per sequence.
         assertEquals(VectorGestureState.Activated, machine.state)
         assertEquals(VectorGestureDirection.Right, machine.release())
         assertNull(machine.release()) // No second navigation.
     }
     @Test fun leftGestureUsesTheSameThreshold() {
         val machine = recognizer()
-        machine.down(); machine.move(-28f, 1f); machine.beginHold(); machine.activate()
+        machine.down(); machine.move(-28f, 1f); machine.beginHold(0); machine.activate(180)
         assertEquals(VectorGestureDirection.Left, machine.release())
     }
     @Test fun earlyReleaseNeverNavigates() {
         val machine = recognizer()
-        machine.down(); machine.move(30f, 0f); machine.beginHold()
+        machine.down(); machine.move(30f, 0f); machine.beginHold(0)
         assertNull(machine.release())
-        assertFalse(machine.activate())
+        assertFalse(machine.activate(180))
     }
     @Test fun verticalIntentWinsBeforeAndAfterThreshold() {
         val machine = recognizer()
         machine.down(); machine.move(4f, 9f)
         assertEquals(VectorGestureState.Cancelled, machine.state)
-        machine.reset(); machine.down(); machine.move(30f, 0f); machine.beginHold(); machine.activate(); machine.move(30f, 21f)
+        machine.reset(); machine.down(); machine.move(30f, 0f); machine.beginHold(0); machine.activate(180); machine.move(30f, 21f)
         assertNull(machine.release())
     }
     @Test fun reversalCancelsEvenAfterActivation() {
         val machine = recognizer()
-        machine.down(); machine.move(40f, 0f); machine.beginHold(); machine.activate(); machine.move(25f, 0f)
+        machine.down(); machine.move(40f, 0f); machine.beginHold(0); machine.activate(180); machine.move(25f, 0f)
         assertNull(machine.release())
     }
     @Test fun multiplePointersAndConsumedChildMovementCancel() {
         for (consumed in listOf(false, true)) {
             val machine = recognizer()
-            machine.down(); machine.move(28f, 0f); machine.beginHold()
+            machine.down(); machine.move(28f, 0f); machine.beginHold(0)
             machine.move(30f, 0f, pointerCount = if (consumed) 1 else 2, consumed = consumed)
-            assertFalse(machine.activate())
+            assertFalse(machine.activate(180))
             assertNull(machine.release())
         }
     }
@@ -74,7 +74,7 @@ class VectorNavigationTest {
         val machine = recognizer()
         repeat(10) {
             machine.down(); machine.move(0f, 30f); machine.reset()
-            machine.down(); machine.move(28f, 0f); machine.beginHold(); assertTrue(machine.activate())
+            machine.down(); machine.move(28f, 0f); machine.beginHold(0); assertTrue(machine.activate(180))
             assertEquals(VectorGestureDirection.Right, machine.release()); machine.reset()
         }
     }

@@ -1,0 +1,102 @@
+[
+  {
+    "stage": "before",
+    "workload": "chats_pull_cancel",
+    "trials": 3,
+    "medianAppliedChanges": 20,
+    "medianOfTrialP95Ms": 4.932835,
+    "frames": 108.0,
+    "missedDeadlineFrames": 1.0,
+    "droppedReports": 0.0
+  },
+  {
+    "stage": "before",
+    "workload": "icon_press_cancel",
+    "trials": 3,
+    "medianAppliedChanges": 27,
+    "medianOfTrialP95Ms": 8.264042,
+    "frames": 27.0,
+    "missedDeadlineFrames": 3.0,
+    "droppedReports": 0.0
+  },
+  {
+    "stage": "before",
+    "workload": "long_list_scroll",
+    "trials": 3,
+    "medianAppliedChanges": 0,
+    "medianOfTrialP95Ms": 7.968157,
+    "frames": 554.0,
+    "missedDeadlineFrames": 35.0,
+    "droppedReports": 0.0
+  },
+  {
+    "stage": "before",
+    "workload": "module_search_roundtrip",
+    "trials": 3,
+    "medianAppliedChanges": 71,
+    "medianOfTrialP95Ms": 73.180161,
+    "frames": 21.0,
+    "missedDeadlineFrames": 21.0,
+    "droppedReports": 0.0
+  },
+  {
+    "stage": "before",
+    "workload": "search_pull_cancel",
+    "trials": 3,
+    "medianAppliedChanges": 19,
+    "medianOfTrialP95Ms": 8.674752,
+    "frames": 55.0,
+    "missedDeadlineFrames": 9.0,
+    "droppedReports": 0.0
+  },
+  {
+    "stage": "final",
+    "workload": "chats_pull_cancel",
+    "trials": 3,
+    "medianAppliedChanges": 3,
+    "medianOfTrialP95Ms": 4.401914,
+    "frames": 63.0,
+    "missedDeadlineFrames": 0.0,
+    "droppedReports": 0.0
+  },
+  {
+    "stage": "final",
+    "workload": "icon_press_cancel",
+    "trials": 3,
+    "medianAppliedChanges": 6,
+    "medianOfTrialP95Ms": 3.46281,
+    "frames": 27.0,
+    "missedDeadlineFrames": 0.0,
+    "droppedReports": 0.0
+  },
+  {
+    "stage": "final",
+    "workload": "long_list_scroll",
+    "trials": 3,
+    "medianAppliedChanges": 0,
+    "medianOfTrialP95Ms": 5.431594,
+    "frames": 554.0,
+    "missedDeadlineFrames": 16.0,
+    "droppedReports": 0.0
+  },
+  {
+    "stage": "final",
+    "workload": "module_search_roundtrip",
+    "trials": 3,
+    "medianAppliedChanges": 49,
+    "medianOfTrialP95Ms": 62.3158,
+    "frames": 21.0,
+    "missedDeadlineFrames": 21.0,
+    "droppedReports": 0.0
+  },
+  {
+    "stage": "final",
+    "workload": "search_pull_cancel",
+    "trials": 3,
+    "medianAppliedChanges": 0,
+    "medianOfTrialP95Ms": 4.633479,
+    "frames": 57.0,
+    "missedDeadlineFrames": 0.0,
+    "droppedReports": 0.0
+  }
+]

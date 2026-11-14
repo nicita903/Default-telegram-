@@ -23,7 +23,7 @@ class RedesignUiTest {
         compose.onNodeWithTag("search_results").performScrollToNode(hasText("Alex Morgan"))
         compose.onNodeWithText("Alex Morgan").assertIsDisplayed()
         compose.onNodeWithContentDescription("Close search").performClick()
-        compose.onNodeWithContentDescription("New message").performClick()
+        compose.onNodeWithText("New chat").performClick()
         compose.onNodeWithText("Choose a sample contact").assertIsDisplayed()
         compose.onNode(hasText("Mira Chen") and hasAnyAncestor(isDialog())).performClick()
         compose.onNodeWithTag("message_composer").assertIsDisplayed()
