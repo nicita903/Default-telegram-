@@ -5,14 +5,20 @@ data class Chat(
     val unread: Int = 0, val pinned: Boolean = false, val archived: Boolean = false,
     val isContact: Boolean = true,
     val kind: ChatKind = if (isContact) ChatKind.Contact else ChatKind.Group,
-)
+    val photo: com.vector.core.profile.ProfilePhoto? = null,
+    val canSend: Boolean = true, val protectedContent: Boolean = false,
+    val order: Long = 0,
+) { override fun toString() = "Chat([redacted])" }
 enum class ChatKind { Contact, Group, Channel }
-enum class Delivery { Received, LocalDemo }
-data class Attachment(val name: String, val uri: String, val mimeType: String)
+enum class Delivery { Received, LocalDemo, Sending, Sent, Read, Failed }
+data class Attachment(val name: String, val uri: String, val mimeType: String) { override fun toString() = "Attachment([redacted])" }
 data class Message(
     val id: Long, val chatId: Long, val text: String, val time: String, val delivery: Delivery,
     val replyTo: Long? = null, val reaction: String? = null, val attachment: Attachment? = null,
-)
+    val date: Long = 0, val outgoing: Boolean = delivery != Delivery.Received,
+    val canRetry: Boolean = false, val retryAt: Long = 0, val canSave: Boolean = true, val restricted: Boolean = false,
+    val senderId: Long = 0, val senderName: String? = null,
+) { override fun toString() = "Message([redacted])" }
 data class GhostPreferences(
     val suppressTyping: Boolean = false, val suppressRecording: Boolean = false,
     val hideOnline: Boolean = false, val hideLastSeen: Boolean = false,
@@ -29,11 +35,15 @@ fun filterChats(chats: List<Chat>, query: String, filter: ChatFilter): List<Chat
             ChatFilter.Channels -> !chat.archived && chat.kind == ChatKind.Channel
             ChatFilter.Archived -> chat.archived
         }
-    }.sortedByDescending { it.pinned }
+    }.let { result -> if (chats.any { it.order != 0L }) result else result.sortedByDescending { it.pinned } }
 
 sealed interface SendResult {
     data object Sent : SendResult
     data object Empty : SendResult
     data object TooLong : SendResult
     data object MissingChat : SendResult
+    data object Failed : SendResult
+    data object Unsupported : SendResult
+    data object Forbidden : SendResult
+    data object Uncertain : SendResult
 }

@@ -18,6 +18,14 @@ class PreferencesViewModel @Inject constructor(
     val appearance = appearanceStore.state
     fun appearance(change: (AppearanceSettings) -> AppearanceSettings) = appearanceStore.update(change)
     val ghostPreferences = ghost.preferences
+    val ghostState = ghost.state
+    fun ghostEnabled(value: Boolean) = ghost.enabled(value)
+    fun selectGhost(id: Long) = ghost.select(id)
+    fun removeGhost(id: Long) = ghost.remove(id)
+    fun ghostPolicy(id: Long, value: com.vector.core.ghost.ContactPrivacy) = ghost.policy(id, value)
+    fun refreshGhost() = ghost.refresh()
+    fun applyGhostPrivacy() = ghost.applyPrivacy()
+    fun keepCurrentPrivacy() = ghost.useCurrentRules()
     val theme = appearanceStore.theme
     val hidePreviews = savedState.getStateFlow("hidePreviews", true)
     val moduleGestures = appearance.map { it.modules }.stateIn(viewModelScope, SharingStarted.Eagerly, appearance.value.modules)

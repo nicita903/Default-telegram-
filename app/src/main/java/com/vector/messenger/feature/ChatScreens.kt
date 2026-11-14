@@ -40,9 +40,10 @@ import com.vector.messenger.navigation.gesture.pullToSearch
 fun ChatsScreen(viewModel: ChatsViewModel, onSelect: (Long) -> Unit, onSearch: () -> Unit = {}, listState: LazyListState = rememberLazyListState()) {
     val chats by viewModel.filteredChats.collectAsStateWithLifecycle()
     val allChats by viewModel.chats.collectAsStateWithLifecycle()
+    val status by viewModel.status.collectAsStateWithLifecycle()
     val filter by viewModel.selectedFilter.collectAsStateWithLifecycle()
     var newMessage by remember { mutableStateOf(false) }
-    var selectedChat by rememberSaveable { mutableStateOf<Long?>(null) }
+    var selectedChat by rememberSaveable(status.session) { mutableStateOf<Long?>(null) }
     val colors = DefaultDesign.colors
     val appearance = LocalAppearance.current
     val pull = remember { PullSearchState() }
@@ -50,6 +51,10 @@ fun ChatsScreen(viewModel: ChatsViewModel, onSelect: (Long) -> Unit, onSearch: (
     val strength = VectorMotionSpec.strength(appearance)
     val offset = rememberInteractiveOffset({ pull.distance * .45f * strength }, { pull.eligible })
     val showingPull by remember { derivedStateOf { pull.distance > 0 } }
+    LaunchedEffect(listState, filter, status.session, status.loading) {
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
+            .collect { last -> if (status.live && !status.loading && status.error == null && last >= 0 && last >= listState.layoutInfo.totalItemsCount - 5) viewModel.moreChats() }
+    }
     Column(Modifier.fillMaxSize()) {
 
         // Chats header
@@ -123,21 +128,28 @@ fun ChatsScreen(viewModel: ChatsViewModel, onSelect: (Long) -> Unit, onSearch: (
         }
 
         DefaultRule()
-        if (chats.isEmpty()) EmptyState("No conversations", "Try a different search or folder.")
+        status.error?.let { DefaultAction(it, viewModel::moreChats, Modifier.padding(horizontal = 20.dp)) }
+        if (chats.isEmpty()) {
+            EmptyState(if (status.live && status.loading) "Loading Telegram chats…" else "No conversations", if (status.live) "Your Telegram chats appear here." else "Try a different search or folder.")
+            if (status.live && !status.loading) DefaultAction("Load chats", viewModel::moreChats)
+        }
         Box(Modifier.weight(1f).fillMaxWidth().pullToSearch(listState, pull, appearance.pullSearch, appearance.pullDistance, appearance.haptics, onSearch)
             .semantics { customActions = listOf(CustomAccessibilityAction("Open Chat Search") { onSearch(); true }) }) {
         if (showingPull) Icon(Icons.Default.Search, "Release to search", Modifier.align(Alignment.TopCenter).padding(top = 8.dp).size(22.dp)
             .graphicsLayer { alpha = (pull.distance / with(density) { appearance.pullDistance.dp.toPx() }).coerceIn(0f, 1f) }, tint = colors.accent)
         LazyColumn(Modifier.fillMaxSize().graphicsLayer { translationY = if (pull.distance > 0) pull.distance * .45f * strength else offset.value }.testTag("chat_list"), state = listState, contentPadding = PaddingValues(bottom = 24.dp)) {
             items(chats, key = { it.id }, contentType = { "chat" }) { chat ->
+                LaunchedEffect(chat.id, chat.photo?.fileId) { viewModel.avatar(chat.id) }
                 ChatRow(chat, selectedChat == chat.id,
                     { selectedChat = chat.id; onSelect(chat.id) }, { viewModel.pin(chat.id) }, { viewModel.archive(chat.id) })
             }
+            if (status.live && !status.loading && (if (filter == ChatFilter.Archived) status.archiveMore else status.mainMore))
+                item(key = "more_chats") { DefaultAction("Load more chats", viewModel::moreChats, Modifier.padding(16.dp)) }
         }
         }
     }
     if (newMessage) DefaultDialog("New message", onDismiss = { newMessage = false }) {
-        Text("Choose a sample contact", color = colors.secondary, style = MaterialTheme.typography.bodyMedium)
+        Text(if (status.live) "Choose a Telegram conversation" else "Choose a sample contact", color = colors.secondary, style = MaterialTheme.typography.bodyMedium)
         Box(Modifier.weight(1f, fill = false)) { ContactsScreen(allChats.filter { it.isContact }) { newMessage = false; onSelect(it) } }
         DefaultAction("Cancel", { newMessage = false }, Modifier.fillMaxWidth())
     }
@@ -159,7 +171,7 @@ private fun ChatRow(chat: Chat, selected: Boolean, onClick: () -> Unit, onPin: (
         .clickable(interactionSource = interaction, indication = null, onClick = onClick).heightIn(min = if (LocalAppearance.current.compact) 72.dp else 88.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.width(2.dp).height(38.dp).background(if (selected) colors.accent else Color.Transparent))
         Spacer(Modifier.width(18.dp))
-        ChatAvatar(chat.title, 46.dp)
+        TelegramAvatar(chat.title, chat.photo, 46.dp)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f).padding(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -226,7 +238,7 @@ fun ContactsScreen(contacts: List<Chat>, onSelect: (Long) -> Unit) {
         items(contacts, key = { it.id }) { contact ->
             Row(Modifier.fillMaxWidth().clickable { onSelect(contact.id) }.heightIn(min = 76.dp).padding(horizontal = 20.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                ChatAvatar(contact.title, 42.dp)
+                TelegramAvatar(contact.title, contact.photo, 42.dp)
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(contact.title, style = MaterialTheme.typography.titleMedium, color = colors.text)
                     Text("Sample contact", style = MaterialTheme.typography.bodySmall, color = colors.secondary)

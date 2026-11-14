@@ -12,6 +12,16 @@ import kotlinx.coroutines.launch
 class ChatsViewModel @Inject constructor(private val repository: ChatRepository) : ViewModel() {
     val chats = repository.chats
     val messages = repository.messages
+    val status = repository.status
+    val history = repository.history
+    fun enter(id: Long) = repository.openConversation(id)
+    fun leave(id: Long) = repository.closeConversation(id)
+    fun older(id: Long) = repository.loadOlder(id)
+    fun visible(id: Long, ids: List<Long>) = repository.viewMessages(id, ids)
+    fun retry(id: Long, messageId: Long) = repository.retry(id, messageId)
+    fun moreChats() = repository.loadMoreChats(filter.value == ChatFilter.Archived)
+    fun avatar(id: Long) = repository.avatar(id)
+    fun latest(id: Long) = repository.latest(id)
     private val query = MutableStateFlow("")
     private val filter = MutableStateFlow(ChatFilter.All)
     val search = query.asStateFlow()
@@ -33,6 +43,10 @@ class ChatsViewModel @Inject constructor(private val repository: ChatRepository)
                 SendResult.Empty -> errorState.value = "Write a message first."
                 SendResult.TooLong -> errorState.value = "Use 4,096 characters or fewer."
                 SendResult.MissingChat -> errorState.value = "This conversation is unavailable."
+                SendResult.Failed -> errorState.value = "Telegram could not send this message. Try again."
+                SendResult.Unsupported -> errorState.value = "Only text messages are supported for Telegram in this phase."
+                SendResult.Forbidden -> errorState.value = "You cannot send messages in this conversation."
+                SendResult.Uncertain -> errorState.value = "Send status is unknown. Check the conversation before sending again."
             }
         }
     }

@@ -106,7 +106,7 @@ internal fun AuthenticationContent(state: AuthState, submit: (AuthAction) -> Uni
             AuthStep.Ready -> {
                 Text("Signed in to Telegram", style = MaterialTheme.typography.titleMedium)
                 AccountProfileContent(profileState, refreshProfile)
-                Text("Telegram profile · chats remain local demo data.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("Your Telegram session is restored automatically.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 DefaultAction("Log out", { logoutConfirmation = true }, enabled = !state.busy)
             }
             AuthStep.LoggingOut -> { CircularProgressIndicator(Modifier.size(28.dp)); Text("Closing your Telegram session… Keep a network connection available to complete logout.") }

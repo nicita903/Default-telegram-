@@ -53,5 +53,5 @@ object Routes {
     const val Conversation = "conversation/{chatId}"
     const val MusicSection = "library/{section}"
     val main = AppModule.entries.map { it.name }
-    fun conversation(id: Long): String { require(id > 0); return "conversation/$id" }
+    fun conversation(id: Long): String { require(id != 0L); return "conversation/$id" }
 }

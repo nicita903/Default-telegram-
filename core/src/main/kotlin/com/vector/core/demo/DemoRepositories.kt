@@ -55,9 +55,9 @@ class DemoChatRepository : ChatRepository {
 
 /** Local UI demonstration; settings reset on process death and never change Telegram privacy. */
 class DemoGhostRepository : GhostRepository {
-    private val state = MutableStateFlow<Map<Long, GhostPreferences>>(emptyMap())
-    override val preferences = state.asStateFlow()
+    private val preferenceState = MutableStateFlow<Map<Long, GhostPreferences>>(emptyMap())
+    override val preferences = preferenceState.asStateFlow()
     override fun update(contactId: Long, preferences: GhostPreferences) {
-        state.update { it + (contactId to preferences) }
+        preferenceState.update { it + (contactId to preferences) }
     }
 }

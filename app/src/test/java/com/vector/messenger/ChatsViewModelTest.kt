@@ -67,6 +67,7 @@ class ChatsViewModelTest {
     }
     @Test fun conversationRoutesRequireValidIdentifiers() {
         assertEquals("conversation/42", Routes.conversation(42))
+        assertEquals("conversation/-100", Routes.conversation(-100))
         assertThrows(IllegalArgumentException::class.java) { Routes.conversation(0) }
     }
 }

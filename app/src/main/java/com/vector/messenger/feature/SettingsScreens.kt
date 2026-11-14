@@ -66,13 +66,19 @@ fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit) {
         Text("Preview preference only. Notifications are not implemented in this phase.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         HorizontalDivider()
         Text("About DEFAULT", style = MaterialTheme.typography.titleMedium)
-        Text("Default · 0.1.0\nAppearance preferences are stored on this device. Sample conversations are not synchronized. Manage your Telegram session from Account.")
+        Text("Default · 0.1.0\nAppearance preferences are stored on this device. Signed-in chats use Telegram; signed-out chats are a separate demonstration. Manage your session from Account.")
         Text("Telegram cloud chats are not end-to-end encrypted. Only supported Secret Chats offer Telegram's end-to-end encryption model.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
 @Composable
 fun PrivacyScreen(contacts: List<Chat>, viewModel: PreferencesViewModel) {
+    val liveState by viewModel.ghostState.collectAsStateWithLifecycle()
+    if (liveState.authenticated) {
+        SelectiveGhostScreen(liveState, viewModel::ghostEnabled, viewModel::selectGhost, viewModel::removeGhost,
+            viewModel::ghostPolicy, viewModel::refreshGhost, viewModel::applyGhostPrivacy, viewModel::keepCurrentPrivacy)
+        return
+    }
     val preferences by viewModel.ghostPreferences.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp).testTag("privacy_scroll"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Ghost Mode", style = MaterialTheme.typography.headlineSmall)
@@ -91,8 +97,11 @@ fun PrivacyScreen(contacts: List<Chat>, viewModel: PreferencesViewModel) {
 }
 
 @Composable
-fun PreferenceToggle(title: String, selected: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).excludeModuleGestures().toggleable(value = selected, role = Role.Switch, onValueChange = onChange), verticalAlignment = Alignment.CenterVertically) {
+fun PreferenceToggle(title: String, selected: Boolean, onChange: (Boolean) -> Unit) = PreferenceToggle(title, selected, true, onChange)
+
+@Composable
+fun PreferenceToggle(title: String, selected: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).excludeModuleGestures().toggleable(value = selected, enabled = enabled, role = Role.Switch, onValueChange = onChange), verticalAlignment = Alignment.CenterVertically) {
         Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
         Box(Modifier.width(30.dp).height(18.dp).background(if (selected) DefaultDesign.colors.accent else DefaultDesign.colors.raised, CircleShape).padding(3.dp)) {
             Box(Modifier.size(12.dp).align(if (selected) Alignment.CenterEnd else Alignment.CenterStart).background(if (selected) Color.Black else DefaultDesign.colors.secondary, CircleShape))

@@ -19,6 +19,7 @@ class SearchViewModel @Inject constructor(
     val musicQuery = saved.getStateFlow("musicQuery", "")
     val chats = repository.chats
     val messages = repository.messages
+    val status = repository.status
     private val recentState = MutableStateFlow<List<String>>(emptyList())
     val recents = recentState.asStateFlow()
     val library = music.library.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), MusicLibrary())

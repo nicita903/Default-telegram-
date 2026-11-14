@@ -96,6 +96,7 @@ fun SearchWorkspace(viewModel: SearchViewModel, scope: SearchScope, blockedAttem
 @Composable
 private fun ChatSearchResults(viewModel: SearchViewModel, query: String, listState: LazyListState, onOpen: (Long) -> Unit) {
     val chats by viewModel.chats.collectAsStateWithLifecycle()
+    val status by viewModel.status.collectAsStateWithLifecycle()
     val messages by viewModel.messages.collectAsStateWithLifecycle()
     val recents by viewModel.recents.collectAsStateWithLifecycle()
     var category by rememberSaveable { mutableStateOf("All") }
@@ -112,7 +113,7 @@ private fun ChatSearchResults(viewModel: SearchViewModel, query: String, listSta
     } }
     SearchChoices(listOf("All", "People", "Conversations", "Messages", "Media", "Files", "Links"), category) { category = it }
     LazyColumn(Modifier.fillMaxSize().searchRegion(SearchRegionKind.Results).testTag("search_results"), state = listState, contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        item { SearchCaption("Demo repository · not synchronized") }
+        item { SearchCaption(if (status.live) "Loaded Telegram chats and messages" else "Demo repository · not synchronized") }
         if (query.isEmpty()) {
             if (recents.isNotEmpty()) {
                 item { Row(verticalAlignment = Alignment.CenterVertically) { Text("Recent searches", Modifier.weight(1f), color = DefaultDesign.colors.secondary); DefaultIconControl(Icons.Default.Close, "Clear recent searches", viewModel::clearRecent, Modifier.searchRegion(SearchRegionKind.Excluded), quiet = true) } }
@@ -139,9 +140,9 @@ private fun ChatSearchResults(viewModel: SearchViewModel, query: String, listSta
     }
     create?.let { title -> DefaultDialog(title, { create = null }) {
         if (title == "New chat") {
-            Text("Choose a sample contact", color = DefaultDesign.colors.secondary)
+            Text(if (status.live) "Choose a Telegram conversation" else "Choose a sample contact", color = DefaultDesign.colors.secondary)
             Box(Modifier.heightIn(max = 320.dp)) { ContactsScreen(chats.filter { it.isContact }) { create = null; onOpen(it) } }
-        } else Text("${title.removePrefix("New ").replaceFirstChar { it.uppercase() }} creation requires the Telegram messaging repository. This build supports authentication; group and channel creation are not connected yet.", color = DefaultDesign.colors.secondary)
+        } else Text("${title.removePrefix("New ").replaceFirstChar { it.uppercase() }} creation is not supported in this phase.", color = DefaultDesign.colors.secondary)
         DefaultAction("Done", { create = null }, Modifier.fillMaxWidth())
     } }
 }

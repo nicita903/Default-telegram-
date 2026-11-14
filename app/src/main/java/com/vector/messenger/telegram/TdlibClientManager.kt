@@ -16,6 +16,8 @@ import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.drinkless.tdlib.JsonClient
@@ -33,6 +35,26 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
     override val profileUpdates = profileEvents.asSharedFlow()
     private val connectionState = MutableStateFlow(ProfileConnection.Connecting)
     override val connection = connectionState.asStateFlow()
+    private val ghostEvents = MutableSharedFlow<JSONObject>(extraBufferCapacity = 64)
+    internal val ghostUpdates = ghostEvents.asSharedFlow()
+    private val actionTargets = ConcurrentHashMap<Long, Long>()
+    @Volatile private var actionPolicy: (Long, String) -> Boolean = { _, action -> action == "chatActionCancel" }
+    internal fun installChatActionPolicy(policy: (Long, String) -> Boolean) { actionPolicy = policy }
+    internal fun hasActionTarget(chatId: Long) = actionTargets.containsKey(chatId)
+    private fun cacheActionTarget(chat: JSONObject) {
+        val type = chat.optJSONObject("type") ?: return
+        val peer = when (type.optString("@type")) {
+            "chatTypePrivate" -> type.optLong("user_id")
+            "chatTypeBasicGroup", "chatTypeSupergroup" -> 0L
+            else -> -1L
+        }
+        actionTargets[chat.optLong("id")] = peer
+    }
+    private class MessagingEnvelope(val epoch: Long, val value: JSONObject)
+    // Preserve startup updates before the chat repository subscribes. There is exactly one consumer.
+    private val messagingEvents = Channel<MessagingEnvelope>(Channel.UNLIMITED)
+    internal val messagingUpdates = messagingEvents.receiveAsFlow()
+        .filter { it.epoch == sessionEpoch && authorized }.map { it.value }
     @Volatile private var authorized = false
     @Volatile private var sessionEpoch = 0L
     @Volatile private var profileRevision = 0L
@@ -70,6 +92,7 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                         val extra = json.optLong("@extra", -1)
                         if (extra != -1L) {
                             pending.remove(extra)?.let { waiting ->
+                                if (waiting.type == "getChat" && waiting.epoch == sessionEpoch && authorized && json.optString("@type") == "chat") cacheActionTarget(json)
                                 if (waiting.type == "getMe" && waiting.epoch == sessionEpoch && authorized &&
                                     (selfId == 0L || waiting.profileRevision == profileRevision) && json.optString("@type") == "user") {
                                     publishCurrentUser(json)
@@ -79,6 +102,7 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                             continue
                         }
                         when (json.optString("@type")) {
+                            "updateNewChat" -> json.optJSONObject("chat")?.let(::cacheActionTarget)
                             "updateUser" -> json.optJSONObject("user")?.let { user ->
                                 if (authorized && selfId != 0L && user.optLong("id") == selfId) publishCurrentUser(user)
                             }
@@ -88,10 +112,16 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                             }
                             "updateConnectionState" -> connectionState.value = mapProfileConnection(json.optJSONObject("state") ?: JSONObject())
                         }
+                        if (authorized && json.optString("@type") in messagingTypes) messagingEvents.send(MessagingEnvelope(sessionEpoch, json))
+                        if (authorized && (json.optString("@type") == "updateUserPrivacySettingRules" || json.optString("@type") == "updateUser")) ghostEvents.emit(json)
                         if (json.optString("@type") != "updateAuthorizationState") continue
                         val auth = json.getJSONObject("authorization_state")
                         authorized = auth.optString("@type") == "authorizationStateReady"
-                        if (!authorized) { sessionEpoch++; selfId = 0; selfPhotoId = 0 }
+                        if (!authorized) {
+                            sessionEpoch++; selfId = 0; selfPhotoId = 0
+                            actionTargets.clear()
+                            while (messagingEvents.tryReceive().isSuccess) { /* Discard prior-session account data. */ }
+                        }
                         when (auth.optString("@type")) {
                             "authorizationStateLoggingOut" -> { logoutConfirmed = true; events.send(AuthStep.LoggingOut) }
                             "authorizationStateReady" -> { logoutConfirmed = false; events.send(AuthStep.Ready) }
@@ -177,6 +207,20 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
         return result
     }
 
+    internal suspend fun messagingRequest(payload: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+        if (!authorized || clientId == 0) throw com.vector.core.messaging.MessagingException(com.vector.core.messaging.MessagingFailure.Unavailable)
+        val epoch = sessionEpoch
+        val result = try { send(payload) }
+        catch (_: TimeoutCancellationException) { throw com.vector.core.messaging.MessagingException(com.vector.core.messaging.MessagingFailure.Network) }
+        if (epoch != sessionEpoch || !authorized) throw com.vector.core.messaging.MessagingException(com.vector.core.messaging.MessagingFailure.Unavailable)
+        result
+    }
+    internal fun messagingPhoto(file: JSONObject) = mapProfileFile(file, files)
+
+    private val messagingTypes = setOf("updateNewChat", "updateChatPosition", "updateChatDraftMessage", "updateChatLastMessage", "updateChatTitle", "updateChatPhoto",
+        "updateChatReadInbox", "updateChatReadOutbox", "updateChatPermissions", "updateChatHasProtectedContent", "updateNewMessage",
+        "updateMessageSendSucceeded", "updateMessageSendFailed", "updateMessageContent", "updateDeleteMessages", "updateFile", "updateUser", "updateSupergroup")
+
     private suspend fun <T> profileRequest(block: suspend () -> T): T = withContext(Dispatchers.IO) {
         try { block() }
         catch (_: TimeoutCancellationException) { throw ProfileRequestException(ProfileFailure.Network) }
@@ -186,6 +230,10 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
     }
 
     private suspend fun send(payload: JSONObject): JSONObject {
+        if (payload.optString("@type") == "sendChatAction") {
+            val action = payload.optJSONObject("action")?.optString("@type") ?: "chatActionCancel"
+            if (!actionPolicy(actionTargets[payload.optLong("chat_id")] ?: -1L, action)) return request("ok", "@default_suppressed" to true)
+        }
         val id = ids.incrementAndGet()
         val deferred = CompletableDeferred<JSONObject>()
         pending[id] = Pending(deferred, payload.optString("@type"), sessionEpoch, profileRevision)

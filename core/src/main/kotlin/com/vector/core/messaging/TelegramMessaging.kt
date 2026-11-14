@@ -1,0 +1,44 @@
+package com.vector.core.messaging
+
+import com.vector.core.*
+import com.vector.core.profile.*
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
+
+data class ChatPosition(val archived: Boolean, val order: Long, val pinned: Boolean)
+data class TelegramChat(val chat: Chat, val positions: List<ChatPosition>, val lastMessageId: Long = 0, val lastReadOutbox: Long = 0,
+    val peerId: Long = 0, val supergroup: Boolean = false, val lastRestricted: Boolean = false)
+sealed interface ChatUpdate {
+    data class Snapshot(val value: TelegramChat) : ChatUpdate
+    data class Position(val id: Long, val value: ChatPosition) : ChatUpdate
+    data class Positions(val id: Long, val values: List<ChatPosition>) : ChatUpdate
+    data class Preview(val id: Long, val text: String, val time: String, val lastId: Long, val positions: List<ChatPosition>, val restricted: Boolean = false) : ChatUpdate
+    data class Title(val id: Long, val title: String) : ChatUpdate
+    data class Photo(val id: Long, val photo: ProfilePhoto?) : ChatUpdate
+    data class Unread(val id: Long, val count: Int) : ChatUpdate
+    data class ReadOutbox(val id: Long, val lastId: Long) : ChatUpdate
+    data class Permissions(val id: Long, val canSend: Boolean) : ChatUpdate
+    data class Protection(val id: Long, val protected: Boolean) : ChatUpdate
+    data class Upsert(val message: Message, val oldId: Long? = null) : ChatUpdate
+    data class Content(val chatId: Long, val messageId: Long, val text: String) : ChatUpdate
+    data class Deleted(val chatId: Long, val ids: List<Long>) : ChatUpdate
+    data class File(val photo: ProfilePhoto) : ChatUpdate
+    data class Access(val peerId: Long, val supergroup: Boolean, val restricted: Boolean, val canSendOverride: Boolean? = null, val displayName: String? = null) : ChatUpdate
+}
+enum class MessagingFailure { Network, Unavailable, Forbidden }
+class MessagingException(val failure: MessagingFailure) : Exception("Telegram request failed")
+
+interface TelegramMessagingClient {
+    val updates: Flow<ChatUpdate>
+    val connection: StateFlow<ProfileConnection>
+    suspend fun loadChats(archived: Boolean, limit: Int): Boolean
+    suspend fun history(chatId: Long, fromId: Long, limit: Int): List<Message>
+    suspend fun sendText(chatId: Long, text: String, replyTo: Long?): Message
+    suspend fun resend(chatId: Long, messageId: Long): List<Message>
+    suspend fun openChat(chatId: Long)
+    suspend fun closeChat(chatId: Long)
+    suspend fun view(chatId: Long, ids: List<Long>)
+    suspend fun pin(chatId: Long, archived: Boolean, pinned: Boolean)
+    suspend fun archive(chatId: Long, archived: Boolean)
+    suspend fun downloadAvatar(fileId: Int): ProfilePhoto
+}

@@ -15,6 +15,12 @@ class TerminalTestAppearance(private val compose: AndroidComposeTestRule<*, Main
     private lateinit var theme: String
     private lateinit var preferences: PreferencesViewModel
     fun before() {
+        lateinit var authentication: com.vector.messenger.feature.AuthenticationViewModel
+        compose.runOnUiThread {
+            authentication = androidx.lifecycle.ViewModelProvider(compose.activity)[com.vector.messenger.feature.AuthenticationViewModel::class.java]
+        }
+        compose.waitUntil(10000) { authentication.state.value.step != com.vector.core.auth.AuthStep.Starting }
+        org.junit.Assume.assumeFalse("Demo UI regressions must not send through a real account", authentication.state.value.step == com.vector.core.auth.AuthStep.Ready)
         compose.runOnUiThread {
             compose.activity.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             preferences = ViewModelProvider(compose.activity)[PreferencesViewModel::class.java]

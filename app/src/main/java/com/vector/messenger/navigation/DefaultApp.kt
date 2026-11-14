@@ -76,6 +76,7 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
     }
     val gestureConfig = VectorGestureConfig(distance = appearance.distance.dp, holdMillis = appearance.hold.toLong())
     val allChats by chats.chats.collectAsStateWithLifecycle()
+    val chatStatus by chats.status.collectAsStateWithLifecycle()
     val contact = allChats.find { it.id == entry?.arguments?.getLong("chatId") }
     val gesture = remember { VectorGestureController() }
     val exclusions = remember { GestureExclusions() }
@@ -118,8 +119,16 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                     val internalBack = nav.previousBackStackEntry != null
                     DefaultHeader(
                         title = if (conversation) contact?.title ?: "Conversation" else if (displayedModule == AppModule.Chats) "Default" else displayedModule.label,
-                        subtitle = if (conversation) "Sample conversation" else if (searchVisible) "Search workspace" else if (displayedModule == AppModule.Chats) "Demo chats · not synchronized" else "",
+                        subtitle = if (conversation) { if (chatStatus.live) "Telegram" else "Sample conversation" }
+                            else if (searchVisible) "Search workspace" else if (displayedModule == AppModule.Chats) {
+                                if (!chatStatus.live) "Demo chats · not synchronized" else when (chatStatus.connection) {
+                                    com.vector.core.profile.ProfileConnection.Ready -> "Telegram"
+                                    com.vector.core.profile.ProfileConnection.WaitingForNetwork -> "Waiting for network"
+                                    else -> "Connecting to Telegram…"
+                                }
+                            } else "",
                         avatarName = if (conversation) contact?.title else null,
+                        avatarPhoto = if (conversation) contact?.photo else null,
                         navigationIcon = if (internalBack || searchVisible) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
                         navigationDescription = if (searchVisible) "Close search" else if (!internalBack) "Open navigation" else if (conversation && displayedModule == AppModule.Contacts) "Back to contacts" else if (conversation) "Back to chats" else "Back within module",
                         onNavigation = { if (searchVisible) closeSearch() else if (internalBack) nav.popBackStack() else menu = true },
