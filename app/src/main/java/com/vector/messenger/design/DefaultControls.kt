@@ -138,10 +138,11 @@ fun DefaultDialog(title: String, onDismiss: () -> Unit, content: @Composable Col
 }
 
 @Composable
-fun DefaultActionMenu(open: Boolean, onDismiss: () -> Unit, content: @Composable ColumnScope.() -> Unit) {
+fun DefaultActionMenu(open: Boolean, onDismiss: () -> Unit, offset: androidx.compose.ui.unit.IntOffset = androidx.compose.ui.unit.IntOffset.Zero,
+    content: @Composable ColumnScope.() -> Unit) {
     val settings = LocalAppearance.current
     val visible = remember { MutableTransitionState(false) }.apply { targetState = open }
-    if (visible.currentState || visible.targetState) Popup(alignment = Alignment.TopEnd, onDismissRequest = onDismiss, properties = PopupProperties(focusable = true)) {
+    if (visible.currentState || visible.targetState) Popup(alignment = Alignment.TopEnd, offset = offset, onDismissRequest = onDismiss, properties = PopupProperties(focusable = true)) {
         RegisterFloatingBackdrop()
         AnimatedVisibility(visibleState = visible, enter = VectorMotionSpec.contextEnter(settings), exit = VectorMotionSpec.contextExit(settings)) {
         CompositionLocalProvider(LocalFloatingContent provides true) {

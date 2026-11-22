@@ -39,6 +39,16 @@ class DemoChatRepository : ChatRepository {
         chatState.update { list -> list.map { if (it.id == chatId) it.copy(preview = trimmed.ifEmpty { attachment?.name.orEmpty() }, time = "Now") else it } }
         return SendResult.Sent
     }
+    override suspend fun editText(chatId: Long, messageId: Long, text: String): SendResult {
+        if (text.isBlank()) return SendResult.Empty
+        if (text.length > 4096) return SendResult.TooLong
+        val original = messageState.value.find { it.id == messageId && it.chatId == chatId } ?: return SendResult.MissingChat
+        if (!original.outgoing || original.attachment != null) return SendResult.Forbidden
+        messageState.update { list -> list.map { if (it.id == messageId && it.chatId == chatId) it.copy(text = text) else it } }
+        if (messageState.value.lastOrNull { it.chatId == chatId }?.id == messageId)
+            chatState.update { list -> list.map { if (it.id == chatId) it.copy(preview = text) else it } }
+        return SendResult.Sent
+    }
     override fun toggleReaction(chatId: Long, messageId: Long, reaction: String) {
         if (reaction !in setOf("👍", "❤", "✨")) return
         messageState.update { list -> list.map {

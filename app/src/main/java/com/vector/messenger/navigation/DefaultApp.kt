@@ -177,9 +177,10 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                             }
                         },
                         trailing = {
-                            if (internalBack) DefaultIconControl(Icons.Default.Menu, "Open navigation", { menu = true },
+                            if (conversation && contact != null) com.vector.messenger.feature.ConversationOptions(contact, chats)
+                            else if (internalBack && !conversation) DefaultIconControl(Icons.Default.Menu, "Open navigation", { menu = true },
                                 Modifier.excludeModuleGestures(), quiet = true)
-                            else if (displayedModule == AppModule.Chats) DefaultIconControl(Icons.Default.Add, "New chat", { newMessage = true },
+                            else if (!conversation && displayedModule == AppModule.Chats) DefaultIconControl(Icons.Default.Add, "New chat", { newMessage = true },
                                 Modifier.excludeModuleGestures(), quiet = true)
                         },
                         titleModifier = Modifier.moduleGestureSurface(gesture, ModuleGestureSurface.Header).testTag("header_gesture_surface"),

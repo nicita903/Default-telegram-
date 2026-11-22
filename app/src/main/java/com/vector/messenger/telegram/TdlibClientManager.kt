@@ -223,7 +223,7 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
 
     private val messagingTypes = setOf("updateNewChat", "updateChatPosition", "updateChatDraftMessage", "updateChatLastMessage", "updateChatTitle", "updateChatPhoto",
         "updateChatReadInbox", "updateChatReadOutbox", "updateChatPermissions", "updateChatHasProtectedContent", "updateNewMessage",
-        "updateMessageSendSucceeded", "updateMessageSendFailed", "updateMessageContent", "updateDeleteMessages", "updateFile", "updateUser", "updateSupergroup")
+        "updateMessageSendSucceeded", "updateMessageSendFailed", "updateMessageContent", "updateMessageInteractionInfo", "updateDeleteMessages", "updateFile", "updateUser", "updateSupergroup")
 
     private suspend fun <T> profileRequest(block: suspend () -> T): T = withContext(Dispatchers.IO) {
         try { block() }

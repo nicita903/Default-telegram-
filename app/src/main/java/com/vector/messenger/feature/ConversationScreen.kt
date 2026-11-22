@@ -15,9 +15,6 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Send
-import androidx.compose.material.icons.filled.Close
 import com.vector.messenger.design.DesignIcon as Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -31,6 +28,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -55,7 +54,9 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
     val newestFirst = remember(messages) { messages.asReversed() }
     val byId = remember(messages) { messages.associateBy { it.id } }
     val chat = chats.find { it.id == chatId }
-    var draft by rememberSaveable(chatId, status.session) { mutableStateOf("") }
+    var draft by rememberSaveable(chatId, status.session, stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
+    var editId by rememberSaveable(chatId, status.session) { mutableStateOf<Long?>(null) }
+    var editDraft by rememberSaveable(chatId, status.session, stateSaver = TextFieldValue.Saver) { mutableStateOf(TextFieldValue()) }
     var replyTo by rememberSaveable(chatId, status.session) { mutableStateOf<Long?>(null) }
     var attachmentUri by rememberSaveable(chatId, status.session) { mutableStateOf<String?>(null) }
     var attachmentName by rememberSaveable(chatId, status.session) { mutableStateOf<String?>(null) }
@@ -64,11 +65,18 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
     var actionsFor by remember(status.session) { mutableStateOf<Long?>(null) }
     var selectText by remember(status.session) { mutableStateOf<String?>(null) }
     val error by viewModel.error.collectAsStateWithLifecycle()
+    val submitting by viewModel.submitting.collectAsStateWithLifecycle()
+    val busy = chatId in submitting
     val listState = rememberLazyListState()
     var previousLastId by rememberSaveable(chatId, status.session) { mutableStateOf<Long?>(null) }
     val context = LocalContext.current
     val mediaViewModel = LocalMediaViewModel.current
     val voiceViewModel = com.vector.messenger.feature.audio.LocalVoiceViewModel.current
+    val voiceState by remember(voiceViewModel) {
+        voiceViewModel?.state ?: kotlinx.coroutines.flow.MutableStateFlow(com.vector.core.audio.RecordingState())
+    }.collectAsStateWithLifecycle()
+    val recording = voiceState.chatId == chatId && voiceState.phase != com.vector.core.audio.RecordingPhase.Idle &&
+        voiceState.phase != com.vector.core.audio.RecordingPhase.Failed && voiceState.phase != com.vector.core.audio.RecordingPhase.Uncertain
     LaunchedEffect(voiceViewModel, chatId, status.session) {
         voiceViewModel?.accepted?.collect { accepted -> if (accepted.chatId == chatId && replyTo == accepted.replyTo) replyTo = null }
     }
@@ -130,7 +138,7 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
                     Column {
                     if (!outgoing && !grouped && chat?.kind == ChatKind.Group) message.senderName?.let { Text(it, color = colors.accent, style = MaterialTheme.typography.labelSmall) }
                     MessageBubble(message, byId[message.replyTo], grouped,
-                        onActions = { actionsFor = message.id }, onReply = { replyTo = message.id },
+                        onActions = { actionsFor = message.id }, onReply = { if (!busy && !recording) { editId = null; replyTo = message.id } },
                         onReaction = { viewModel.react(chatId, message.id, it) },
                         mediaViewModel = mediaViewModel, mediaItem = mediaItems.find { it.messageId == message.id },
                         onMedia = { mediaSelection = message.id },
@@ -151,43 +159,66 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
                 }
             }
         }
-        Column(Modifier.excludeModuleGestures()
-            .padding(horizontal = 8.dp, vertical = 8.dp)
-            .glassSurface(DefaultDesign.composerShape)) {
-            com.vector.messenger.feature.audio.VoiceRecordingPanel(chatId)
-            byId[replyTo]?.let { reply -> ComposerPreview("Reply to ${if (reply.outgoing) "you" else chat?.title.orEmpty()}", reply.text.ifEmpty { reply.attachment?.name.orEmpty() }) { replyTo = null } }
-            attachmentName?.let { name -> ComposerPreview("Local attachment", name) { attachmentUri = null; attachmentName = null; attachmentMime = null } }
-            (fileError ?: error)?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) }
-            Row(Modifier.fillMaxWidth().padding(6.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (!status.live) DefaultIconControl(VectorIcons.Attach, "Attach file", {
-                    try { picker.launch(arrayOf("*/*")) } catch (_: ActivityNotFoundException) { fileError = "No document picker is available." }
-                }, quiet = true)
-                DefaultInput(draft, { draft = it }, if (status.live) "Message" else "Demo message", Modifier.weight(1f).testTag("message_composer"), singleLine = false, maxLines = 5, framed = false,
-                    surface = androidx.compose.ui.graphics.Color.Transparent)
-                if (status.live && draft.isBlank() && attachmentUri == null)
-                    com.vector.messenger.feature.audio.VoiceMicrophone(chatId, replyTo, chat?.canSend == true)
-                DefaultIconControl(Icons.AutoMirrored.Filled.Send, if (status.live) "Send message" else "Send demo message", {
-                    val submittedDraft = draft
+        val reply = byId[replyTo]
+        val editingMessage = editId
+        AdaptiveMessageInput(
+            chatId = chatId, replyTo = replyTo, value = if (editId != null) editDraft else draft,
+            onValueChange = { fileError = null; if (editId != null) editDraft = it else draft = it },
+            live = status.live, enabled = !status.live || chat?.canSend == true,
+            busy = busy, recording = recording, editing = editId != null,
+            contextTitle = if (editId != null) "EDITING MESSAGE" else reply?.let {
+                "Replying to ${if (it.outgoing) "you" else it.senderName ?: chat?.title.orEmpty()}"
+            },
+            contextText = if (editId != null) "" else reply?.let { it.text.ifEmpty { it.attachment?.name ?: it.media?.name.orEmpty() } }.orEmpty(),
+            onCancelContext = { if (editId != null) { editId = null; editDraft = TextFieldValue() } else replyTo = null },
+            attachmentName = attachmentName,
+            onRemoveAttachment = { attachmentUri = null; attachmentName = null; attachmentMime = null },
+            error = fileError ?: error,
+            onAttach = {
+                if (status.live) fileError = "File uploads are not supported in this Telegram build. Text and voice messages are available."
+                else try { picker.launch(arrayOf("*/*")) }
+                catch (_: ActivityNotFoundException) { fileError = "No document picker is available." }
+            },
+            onSubmit = submit@ {
+                // A stale check-button callback must never become a new-message send.
+                if (editId != editingMessage) return@submit
+                val editing = editingMessage
+                if (editing != null) {
+                    val submittedEdit = editDraft.text
+                    viewModel.edit(chatId, editing, submittedEdit) {
+                        if (editId == editing && editDraft.text == submittedEdit) { editId = null; editDraft = TextFieldValue() }
+                    }
+                } else {
+                    val submittedDraft = draft.text
                     val submittedReply = replyTo
                     val submittedUri = attachmentUri
                     val attachment = attachmentUri?.let { Attachment(attachmentName ?: "Document", it, attachmentMime ?: "application/octet-stream") }
                     viewModel.send(chatId, submittedDraft, submittedReply, attachment) {
-                        // An asynchronous TDLib response must not erase text/context entered since Send.
-                        if (draft == submittedDraft) draft = ""
+                        // Preserve any draft/context entered while TDLib accepts the submission.
+                        if (draft.text == submittedDraft) draft = TextFieldValue()
                         if (replyTo == submittedReply) replyTo = null
                         if (attachmentUri == submittedUri) { attachmentUri = null; attachmentName = null; attachmentMime = null }
                     }
-                }, enabled = (!status.live || chat?.canSend == true) && (draft.isNotBlank() || attachmentUri != null), emphasized = true)
-            }
-        }
+                }
+            },
+        )
     }
+
     mediaSelection?.let { id -> if (mediaViewModel != null) MediaViewer(mediaItems, id, mediaViewModel) { mediaSelection = null } }
     byId[actionsFor]?.let { selected ->
         DefaultDialog("Message", { actionsFor = null }) {
             if (!status.live) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("👍", "❤", "✨").forEach { reaction -> DefaultAction(reaction, { viewModel.react(chatId, selected.id, reaction); actionsFor = null }, Modifier.weight(1f)) }
             }
-            DefaultAction("Reply", { replyTo = selected.id; actionsFor = null }, Modifier.fillMaxWidth())
+            DefaultAction("Reply", { editId = null; replyTo = selected.id; actionsFor = null }, Modifier.fillMaxWidth(), enabled = !busy && !recording)
+            if (selected.outgoing && selected.text.isNotBlank() && selected.media == null && selected.attachment == null &&
+                !selected.restricted && selected.delivery in listOf(Delivery.LocalDemo, Delivery.Sent, Delivery.Read)) {
+                DefaultAction("Edit message", {
+                    editId = selected.id
+                    editDraft = TextFieldValue(selected.text, TextRange(selected.text.length))
+                    actionsFor = null
+                }, Modifier.fillMaxWidth(), enabled = !busy && !recording)
+            }
             if (chat?.protectedContent != true && selected.canSave) DefaultAction("Select text", { selectText = selected.text; actionsFor = null }, Modifier.fillMaxWidth())
             if (selected.delivery == Delivery.Failed && selected.canRetry) {
                 val ready = selected.retryAt <= System.currentTimeMillis()
@@ -200,19 +231,6 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
         SelectionContainer { Text(text, color = colors.text, modifier = Modifier.heightIn(max = 360.dp).verticalScroll(rememberScrollState())) }
         DefaultAction("Done", { selectText = null }, Modifier.fillMaxWidth())
     } }
-}
-
-@Composable
-private fun ComposerPreview(title: String, text: String, onClose: () -> Unit) {
-    val colors = DefaultDesign.colors
-    Row(Modifier.fillMaxWidth().padding(start = 20.dp, top = 12.dp, end = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Box(Modifier.width(2.dp).height(34.dp).background(colors.accent))
-        Column(Modifier.weight(1f).padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(title, color = colors.accent, style = MaterialTheme.typography.labelSmall)
-            Text(text, color = colors.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
-        }
-        DefaultIconControl(Icons.Default.Close, "Remove $title", onClose)
-    }
 }
 
 @OptIn(ExperimentalFoundationApi::class)

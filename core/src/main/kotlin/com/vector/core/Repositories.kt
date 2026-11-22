@@ -6,6 +6,7 @@ interface ChatRepository {
     val chats: StateFlow<List<Chat>>
     val messages: StateFlow<List<Message>>
     suspend fun send(chatId: Long, text: String, replyTo: Long? = null, attachment: Attachment? = null): SendResult
+    suspend fun editText(chatId: Long, messageId: Long, text: String): SendResult = SendResult.Unsupported
     suspend fun sendVoice(chatId: Long, clip: com.vector.core.audio.VoiceClip, replyTo: Long? = null): SendResult = SendResult.Unsupported
     fun toggleReaction(chatId: Long, messageId: Long, reaction: String)
     fun markRead(chatId: Long)

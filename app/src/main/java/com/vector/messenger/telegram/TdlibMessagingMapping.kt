@@ -55,6 +55,20 @@ internal fun contentText(content: JSONObject): String {
     }
     return if (caption.isBlank()) label else "$label · $caption"
 }
+internal fun mapMessageReactions(info: JSONObject?): List<MessageReaction> {
+    val values = when (val value = info?.opt("reactions")) {
+        is JSONArray -> value
+        is JSONObject -> value.optJSONArray("reactions")
+        else -> null
+    }
+    return values?.objects()?.mapNotNull { value ->
+        val type = value.optJSONObject("type") ?: return@mapNotNull null
+        if (type.optString("@type") != "reactionTypeEmoji") return@mapNotNull null
+        val emoji = type.safeText("emoji")
+        val count = value.optInt("total_count")
+        if (emoji.isEmpty() || count <= 0) null else MessageReaction(emoji, count, value.optBoolean("is_chosen"))
+    }.orEmpty()
+}
 internal fun mapTelegramMessage(json: JSONObject): Message {
     val sending = json.optJSONObject("sending_state")
     val outgoing = json.optBoolean("is_outgoing")
@@ -76,6 +90,10 @@ internal fun mapTelegramMessage(json: JSONObject): Message {
         senderId = json.optJSONObject("sender_id")?.let { if (it.optString("@type") == "messageSenderUser") it.optLong("user_id") else it.optLong("chat_id") } ?: 0,
         senderName = json.safeText("author_signature").takeIf { it.isNotBlank() },
         media = if (blocked) null else mapTelegramMedia(content),
+        reactions = if (blocked) emptyList() else mapMessageReactions(json.optJSONObject("interaction_info")),
+        senderIsChat = json.optJSONObject("sender_id")?.optString("@type") == "messageSenderChat",
+        isService = content.optString("@type") !in setOf("messageText", "messagePhoto", "messageVideo", "messageAudio", "messageVoiceNote",
+            "messageVideoNote", "messageDocument", "messageAnimation", "messageSticker", "messagePoll", "messageContact", "messageLocation", "messageVenue", "messageDice"),
     )
 }
 private fun restrictedMessage(message: JSONObject) = restricted(message) || message.optJSONObject("self_destruct_type") != null || message.optJSONObject("ephemeral_content") != null
@@ -127,6 +145,7 @@ internal fun mapChatUpdate(json: JSONObject, photo: (JSONObject) -> ProfilePhoto
         "updateNewMessage" -> ChatUpdate.Upsert(mapTelegramMessage(json.getJSONObject("message")))
         "updateMessageSendSucceeded", "updateMessageSendFailed" -> ChatUpdate.Upsert(mapTelegramMessage(json.getJSONObject("message")), json.optLong("old_message_id"))
         "updateMessageContent" -> json.getJSONObject("new_content").let { ChatUpdate.Content(id, json.optLong("message_id"), contentText(it), mapTelegramMedia(it)) }
+        "updateMessageInteractionInfo" -> ChatUpdate.Reactions(id, json.optLong("message_id"), mapMessageReactions(json.optJSONObject("interaction_info")))
         "updateDeleteMessages" -> if (json.optBoolean("is_permanent")) ChatUpdate.Deleted(id,
             json.optJSONArray("message_ids")?.let { ids -> (0 until ids.length()).map { ids.optLong(it) } }.orEmpty()) else null
         "updateFile" -> photo(json.getJSONObject("file"))?.let { ChatUpdate.File(it) }

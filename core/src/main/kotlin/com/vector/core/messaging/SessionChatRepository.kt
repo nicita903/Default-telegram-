@@ -35,6 +35,7 @@ class SessionChatRepository(
     private val visibleReads = mutableSetOf<Long>()
     private val sends = mutableSetOf<Long>()
     private val retries = mutableSetOf<Long>()
+    private val reactionRequests = mutableSetOf<Pair<Long, Long>>()
     private var active: Long? = null
     private var atLatest = true
     private var live = false
@@ -44,7 +45,7 @@ class SessionChatRepository(
         scope.launch {
             authentication.state.map { it.step == AuthStep.Ready }.distinctUntilChanged().collectLatest { ready ->
                 epoch++; live = ready; active = null; atLatest = true; historyGeneration++
-                records.clear(); access.clear(); window.clear(); versions.clear(); replaced.clear(); visibleReads.clear()
+                records.clear(); access.clear(); window.clear(); versions.clear(); replaced.clear(); visibleReads.clear(); reactionRequests.clear()
                 orderDirty = true; ordered = emptyList()
                 sends.clear(); retries.clear(); avatarRequests.clear(); listJobs.clear(); publish = null; historyJob = null
                 messageState.value = if (ready) emptyList() else demo.messages.value
@@ -151,6 +152,11 @@ class SessionChatRepository(
                     window[update.messageId]?.takeUnless { it.restricted }?.let { window[update.messageId] = it.copy(text = update.text, media = update.media) }; publishMessages()
                 }
             }
+            is ChatUpdate.Reactions -> if (active == update.chatId) {
+                revision++; versions[update.messageId] = revision
+                window[update.messageId]?.takeUnless { it.restricted }?.let { window[update.messageId] = it.copy(reactions = update.reactions) }
+                publishMessages()
+            }
             is ChatUpdate.Deleted -> if (active == update.chatId) {
                 update.ids.forEach { id -> revision++; versions[id] = revision; window.remove(id) }; publishMessages()
             }
@@ -241,6 +247,25 @@ class SessionChatRepository(
         catch (failure: Exception) { if ((failure as? MessagingException)?.failure == MessagingFailure.Network) SendResult.Uncertain else SendResult.Failed }
         finally { if (session == epoch) sends.remove(chatId) }
     }
+    override suspend fun editText(chatId: Long, messageId: Long, text: String): SendResult {
+        if (!live) return demo.editText(chatId, messageId, text)
+        if (text.isBlank()) return SendResult.Empty
+        if (text.length > 4096) return SendResult.TooLong
+        val original = window[messageId]?.takeIf { it.chatId == chatId } ?: return SendResult.MissingChat
+        if (!original.outgoing || original.media != null || original.attachment != null || original.restricted ||
+            original.delivery !in listOf(Delivery.Sent, Delivery.Read)) return SendResult.Forbidden
+        if (text == original.text) return SendResult.Sent
+        if (!sends.add(chatId)) return SendResult.Failed
+        val session = epoch
+        return try {
+            val message = client.editText(chatId, messageId, text)
+            currentCoroutineContext().ensureActive()
+            if (!live || session != epoch) SendResult.MissingChat
+            else { put(message); publishMessages(); SendResult.Sent }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { if ((failure as? MessagingException)?.failure == MessagingFailure.Forbidden) SendResult.Forbidden else SendResult.Failed }
+        finally { if (session == epoch) sends.remove(chatId) }
+    }
     override suspend fun sendVoice(chatId: Long, clip: com.vector.core.audio.VoiceClip, replyTo: Long?): SendResult {
         if (!live) return SendResult.Unsupported
         if (clip.duration !in 1..600 || clip.path.isBlank() || clip.waveform.size > 100) return SendResult.Empty
@@ -291,7 +316,27 @@ class SessionChatRepository(
     }
     override fun latest(chatId: Long) { if (live) { closeConversation(chatId); openConversation(chatId) } }
     override fun markRead(chatId: Long) { if (!live) demo.markRead(chatId) }
-    override fun toggleReaction(chatId: Long, messageId: Long, reaction: String) { if (!live) demo.toggleReaction(chatId, messageId, reaction) }
+    override fun toggleReaction(chatId: Long, messageId: Long, reaction: String) {
+        if (!live) { demo.toggleReaction(chatId, messageId, reaction); return }
+        val message = window[messageId]?.takeIf { it.chatId == chatId } ?: return
+        if (message.restricted || message.isService || message.delivery in listOf(Delivery.Sending, Delivery.Failed)) return
+        val key = chatId to messageId
+        if (!reactionRequests.add(key)) return
+        val session = epoch
+        sessionScope?.launch {
+            try {
+                val version = versions[messageId]
+                val confirmed = client.toggleReaction(chatId, messageId, reaction)
+                ensureActive()
+                // An incremental update arriving during the request takes priority over its snapshot.
+                if (session == epoch && active == chatId && versions[messageId] == version) {
+                    window[messageId]?.let { window[messageId] = it.copy(reactions = confirmed) }; publishMessages()
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { if (session == epoch) historyState.update { it.copy(error = "This reaction is unavailable or could not be updated.") } }
+            finally { if (session == epoch) reactionRequests.remove(key) }
+        }
+    }
     override fun toggleArchive(chatId: Long) = action(chatId, { demo.toggleArchive(it) }) { record -> client.archive(chatId, !record.chat.archived) }
     override fun togglePin(chatId: Long) = action(chatId, { demo.togglePin(it) }) { record -> client.pin(chatId, record.chat.archived, !record.chat.pinned) }
     private fun action(id: Long, demoAction: (Long) -> Unit, block: suspend (TelegramChat) -> Unit) {

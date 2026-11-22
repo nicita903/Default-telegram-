@@ -22,6 +22,7 @@ sealed interface ChatUpdate {
     data class Upsert(val message: Message, val oldId: Long? = null) : ChatUpdate
     data class Content(val chatId: Long, val messageId: Long, val text: String, val media: com.vector.core.media.TelegramMedia? = null) : ChatUpdate
     data class Deleted(val chatId: Long, val ids: List<Long>) : ChatUpdate
+    data class Reactions(val chatId: Long, val messageId: Long, val reactions: List<MessageReaction>) : ChatUpdate
     data class File(val photo: ProfilePhoto) : ChatUpdate
     data class Access(val peerId: Long, val supergroup: Boolean, val restricted: Boolean, val canSendOverride: Boolean? = null, val displayName: String? = null) : ChatUpdate
 }
@@ -34,6 +35,8 @@ interface TelegramMessagingClient {
     suspend fun loadChats(archived: Boolean, limit: Int): Boolean
     suspend fun history(chatId: Long, fromId: Long, limit: Int): List<Message>
     suspend fun sendText(chatId: Long, text: String, replyTo: Long?): Message
+    suspend fun editText(chatId: Long, messageId: Long, text: String): Message = throw MessagingException(MessagingFailure.Unavailable)
+    suspend fun toggleReaction(chatId: Long, messageId: Long, emoji: String): List<MessageReaction> = throw MessagingException(MessagingFailure.Unavailable)
     suspend fun sendVoice(chatId: Long, clip: com.vector.core.audio.VoiceClip, replyTo: Long?): Message = throw MessagingException(MessagingFailure.Unavailable)
     suspend fun resend(chatId: Long, messageId: Long): List<Message>
     suspend fun openChat(chatId: Long)

@@ -11,6 +11,7 @@ data class Chat(
 ) { override fun toString() = "Chat([redacted])" }
 enum class ChatKind { Contact, Group, Channel }
 enum class Delivery { Received, LocalDemo, Sending, Sent, Read, Failed }
+data class MessageReaction(val emoji: String, val count: Int, val chosen: Boolean = false)
 data class Attachment(val name: String, val uri: String, val mimeType: String) { override fun toString() = "Attachment([redacted])" }
 data class Message(
     val id: Long, val chatId: Long, val text: String, val time: String, val delivery: Delivery,
@@ -19,6 +20,7 @@ data class Message(
     val canRetry: Boolean = false, val retryAt: Long = 0, val canSave: Boolean = true, val restricted: Boolean = false,
     val senderId: Long = 0, val senderName: String? = null,
     val media: com.vector.core.media.TelegramMedia? = null,
+    val reactions: List<MessageReaction> = emptyList(), val isService: Boolean = false, val senderIsChat: Boolean = false,
 ) { override fun toString() = "Message([redacted])" }
 data class GhostPreferences(
     val suppressTyping: Boolean = false, val suppressRecording: Boolean = false,
