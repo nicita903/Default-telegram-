@@ -50,7 +50,11 @@ internal fun ConversationEmojiPicker(onInsert: (String) -> Unit) {
     Column(Modifier.fillMaxWidth().height(248.dp).semantics { paneTitle = "Emoji picker" }) {
         Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(2.dp)) {
             (listOf("Recent") + EmojiCategories.keys).forEach { name ->
-                DefaultAction(name, { category = name }, emphasized = category == name)
+                Box(Modifier.height(48.dp).widthIn(min = 48.dp).clickable(role = Role.Tab) { category = name }
+                    .padding(horizontal = 12.dp).semantics { selected = category == name }, contentAlignment = Alignment.Center) {
+                    Text(name, color = if (category == name) DefaultDesign.colors.accent else DefaultDesign.colors.secondary,
+                        style = MaterialTheme.typography.labelLarge)
+                }
             }
         }
         val entries = if (category == "Recent") recent else EmojiCategories[category].orEmpty()

@@ -73,11 +73,7 @@ object DefaultDesign {
     val composerShape: Shape get() = RoundedCornerShape(28.dp)
     val horizontalPadding = 20.dp
     val minimumTarget = 48.dp
-    fun messageShape(outgoing: Boolean, grouped: Boolean): Shape = RoundedCornerShape(
-        topStart = 19.dp, topEnd = 19.dp,
-        bottomEnd = if (outgoing && !grouped) 7.dp else 19.dp,
-        bottomStart = if (!outgoing && !grouped) 7.dp else 19.dp,
-    )
+    fun messageShape(position: MessageGroupPosition, outgoing: Boolean): Shape = MessageGrouping.shape(position, outgoing)
 }
 
 /** The accent index selects the field's primary and secondary light; there is no light palette.

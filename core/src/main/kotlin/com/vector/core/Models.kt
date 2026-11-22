@@ -8,6 +8,7 @@ data class Chat(
     val photo: com.vector.core.profile.ProfilePhoto? = null,
     val canSend: Boolean = true, val protectedContent: Boolean = false,
     val order: Long = 0,
+    val canSendPhotos: Boolean = canSend,
 ) { override fun toString() = "Chat([redacted])" }
 enum class ChatKind { Contact, Group, Channel }
 enum class Delivery { Received, LocalDemo, Sending, Sent, Read, Failed }
@@ -21,6 +22,7 @@ data class Message(
     val senderId: Long = 0, val senderName: String? = null,
     val media: com.vector.core.media.TelegramMedia? = null,
     val reactions: List<MessageReaction> = emptyList(), val isService: Boolean = false, val senderIsChat: Boolean = false,
+    val mediaAlbumId: Long = 0,
 ) { override fun toString() = "Message([redacted])" }
 data class GhostPreferences(
     val suppressTyping: Boolean = false, val suppressRecording: Boolean = false,

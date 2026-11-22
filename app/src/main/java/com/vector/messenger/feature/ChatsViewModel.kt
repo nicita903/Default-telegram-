@@ -7,9 +7,14 @@ import dagger.hilt.android.lifecycle.HiltViewModel
 import javax.inject.Inject
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import com.vector.core.media.*
+import com.vector.messenger.feature.media.PhotoUploadStore
 
 @HiltViewModel
-class ChatsViewModel @Inject constructor(private val repository: ChatRepository) : ViewModel() {
+class ChatsViewModel @Inject constructor(private val repository: ChatRepository, private val photoStore: PhotoUploadStore? = null) : ViewModel() {
     val chats = repository.chats
     val messages = repository.messages
     val status = repository.status
@@ -29,9 +34,56 @@ class ChatsViewModel @Inject constructor(private val repository: ChatRepository)
     val filteredChats = combine(chats, query, filter, ::filterChats)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     private val errorState = MutableStateFlow<String?>(null)
-    val error = errorState.asStateFlow()
+    val error = combine(errorState, repository.reactionError) { sendError, reactionError -> sendError ?: reactionError }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
     private val pending = MutableStateFlow<Set<Long>>(emptySet())
     val submitting = pending.asStateFlow()
+    private val photoErrorState = MutableStateFlow<String?>(null)
+    val photoError = photoErrorState.asStateFlow()
+    fun clearPhotoError() { photoErrorState.value = null }
+    fun releasePhotoSelection(uris: List<String>) { viewModelScope.launch { photoStore?.release(uris) } }
+    fun cancelPhotoSend(chatId: Long, messageId: Long) = repository.cancelPhotoSend(chatId, messageId)
+    suspend fun photoPreview(uri: String) = photoStore?.preview(uri, status.value.session)
+    fun sendPhotos(chatId: Long, uris: List<String>, caption: String, album: Boolean, replyTo: Long?, onResult: (PhotoSendResult) -> Unit) {
+        if (chatId in pending.value) return
+        val store = photoStore ?: return
+        if (caption.length > 1024) { photoErrorState.value = "Use a caption of 1,024 characters or fewer."; return }
+        if (uris.size !in 1..10 || !status.value.live) { photoErrorState.value = "Select up to 10 photos in a signed-in Telegram conversation."; return }
+        val session = status.value.session
+        pending.value += chatId
+        photoErrorState.value = null
+        viewModelScope.launch {
+            val prepared = mutableListOf<UploadPhoto>()
+            var handedOff = false
+            try {
+                for (uri in uris) {
+                    if (status.value.session != session || !status.value.live) return@launch
+                    prepared += store.prepare(uri)
+                }
+                if (status.value.session != session || !status.value.live) return@launch
+                handedOff = true
+                val result = repository.sendPhotos(chatId, prepared, caption, album, replyTo)
+                if (status.value.session != session) return@launch
+                // An ambiguous native send may still be uploading. Retain its source and block
+                // automatic resubmission; only definitely rejected inputs can be discarded.
+                if (result.result != SendResult.Uncertain) store.discard(prepared.drop(result.accepted))
+                photoErrorState.value = when (result.result) {
+                    SendResult.Sent -> null
+                    SendResult.Uncertain -> "Send status is unknown. Check the conversation before sending these photos again."
+                    SendResult.Forbidden -> "Telegram does not allow photo posting in this conversation."
+                    SendResult.TooLong -> "Use a caption of 1,024 characters or fewer."
+                    else -> "Some photos could not be submitted. Unsent photos are retained here for retry."
+                }
+                onResult(result)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { if (status.value.session == session) photoErrorState.value = "Unable to prepare these photos. Remove unreadable images or select them again." }
+            catch (_: OutOfMemoryError) { if (status.value.session == session) photoErrorState.value = "Not enough memory to prepare this image. Try a smaller photo." }
+            finally {
+                if (!handedOff) withContext(NonCancellable) { store.discard(prepared) }
+                pending.value -= chatId
+            }
+        }
+    }
     data class ChatTool(val chatId: Long, val name: String)
     private val toolState = MutableStateFlow<ChatTool?>(null)
     val chatTool = toolState.asStateFlow()

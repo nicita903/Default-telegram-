@@ -7,6 +7,8 @@ interface ChatRepository {
     val messages: StateFlow<List<Message>>
     suspend fun send(chatId: Long, text: String, replyTo: Long? = null, attachment: Attachment? = null): SendResult
     suspend fun editText(chatId: Long, messageId: Long, text: String): SendResult = SendResult.Unsupported
+    suspend fun sendPhotos(chatId: Long, photos: List<com.vector.core.media.UploadPhoto>, caption: String, album: Boolean, replyTo: Long?): com.vector.core.media.PhotoSendResult = com.vector.core.media.PhotoSendResult(result = SendResult.Unsupported)
+    fun cancelPhotoSend(chatId: Long, messageId: Long) {}
     suspend fun sendVoice(chatId: Long, clip: com.vector.core.audio.VoiceClip, replyTo: Long? = null): SendResult = SendResult.Unsupported
     fun toggleReaction(chatId: Long, messageId: Long, reaction: String)
     fun markRead(chatId: Long)
@@ -14,6 +16,7 @@ interface ChatRepository {
     fun togglePin(chatId: Long)
     val status: StateFlow<ChatStatus> get() = DefaultChatState.status
     val history: StateFlow<HistoryState> get() = DefaultChatState.history
+    val reactionError: StateFlow<String?> get() = DefaultChatState.reactionError
     fun loadMoreChats(archived: Boolean = false) {}
     fun openConversation(chatId: Long) {}
     fun closeConversation(chatId: Long) {}
@@ -29,6 +32,7 @@ data class ChatStatus(val live: Boolean = false, val session: Long = 0, val load
     val connection: com.vector.core.profile.ProfileConnection = com.vector.core.profile.ProfileConnection.Connecting)
 data class HistoryState(val chatId: Long? = null, val loading: Boolean = false, val hasMore: Boolean = true, val error: String? = null)
 private object DefaultChatState {
+    val reactionError = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     val status = kotlinx.coroutines.flow.MutableStateFlow(ChatStatus())
     val history = kotlinx.coroutines.flow.MutableStateFlow(HistoryState())
 }

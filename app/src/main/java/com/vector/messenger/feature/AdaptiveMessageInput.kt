@@ -16,8 +16,6 @@ import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.EmojiEmotions
-import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -52,6 +50,7 @@ fun AdaptiveMessageInput(
     contextTitle: String?, contextText: String, onCancelContext: () -> Unit,
     attachmentName: String?, onRemoveAttachment: () -> Unit, error: String?,
     onAttach: () -> Unit, onSubmit: () -> Unit,
+    attachmentsEnabled: Boolean = enabled,
 ) {
     val settings = LocalAppearance.current
     val colors = DefaultDesign.colors
@@ -86,8 +85,8 @@ fun AdaptiveMessageInput(
         Box(Modifier.fillMaxWidth().animateContentSize(VectorMotionSpec.transition(settings))) {
             Row(Modifier.align(Alignment.BottomStart)) {
                 DefaultIconControl(Icons.Default.Add, "Attach file", onAttach,
-                    enabled = enabled && !editing && !busy && !recording, quiet = true)
-                DefaultIconControl(if (emojiOpen) Icons.Default.Keyboard else Icons.Default.EmojiEmotions,
+                    enabled = attachmentsEnabled && !editing && !busy && !recording, quiet = true)
+                DefaultIconControl(if (emojiOpen) VectorIcons.Keyboard else VectorIcons.Emoji,
                     if (emojiOpen) "Show keyboard" else "Choose emoji", {
                         if (emojiOpen) { emojiOpen = false; focus.requestFocus(); keyboard?.show() }
                         else { emojiOpen = true; keyboard?.hide() }
@@ -96,7 +95,7 @@ fun AdaptiveMessageInput(
             BasicTextField(value, onValueChange,
                 modifier = Modifier.fillMaxWidth().padding(start = 96.dp, end = 48.dp)
                     .padding(bottom = if (expanded) 48.dp else 0.dp).heightIn(min = 48.dp).testTag("message_composer")
-                    .focusRequester(focus).pointerInput(Unit) {
+                    .focusRequester(focus).pointerInput(chatId) {
                         awaitEachGesture { awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial); emojiOpen = false }
                     }
                     .semantics { contentDescription = if (editing) "Edit message" else "Message" },
@@ -127,7 +126,9 @@ fun AdaptiveMessageInput(
             }
         }
         AnimatedVisibility(emojiOpen && !imeVisible, enter = VectorMotionSpec.lockEnter(settings), exit = VectorMotionSpec.lockExit(settings)) {
-            ConversationEmojiPicker { emoji -> updateValue(insertEmoji(latestValue, emoji)) }
+            ConversationEmojiPicker { emoji ->
+                if (enabled && !recording && (!editing || !busy)) updateValue(insertEmoji(latestValue, emoji))
+            }
         }
     }
 }

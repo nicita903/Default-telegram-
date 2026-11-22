@@ -26,9 +26,14 @@ object MessageGrouping {
         return when { before && after -> MessageGroupPosition.MIDDLE; before -> MessageGroupPosition.LAST
             after -> MessageGroupPosition.FIRST; else -> MessageGroupPosition.SINGLE }
     }
-    fun shape(position: MessageGroupPosition): RoundedCornerShape {
+    fun shape(position: MessageGroupPosition, outgoing: Boolean): RoundedCornerShape {
         val top = if (position == MessageGroupPosition.MIDDLE || position == MessageGroupPosition.LAST) ConnectedCorner else NormalCorner
         val bottom = if (position == MessageGroupPosition.MIDDLE || position == MessageGroupPosition.FIRST) ConnectedCorner else NormalCorner
-        return RoundedCornerShape(topStart = top, topEnd = top, bottomStart = bottom, bottomEnd = bottom)
+        return RoundedCornerShape(
+            topStart = if (outgoing) NormalCorner else top,
+            topEnd = if (outgoing) top else NormalCorner,
+            bottomStart = if (outgoing) NormalCorner else bottom,
+            bottomEnd = if (outgoing) bottom else NormalCorner,
+        )
     }
 }

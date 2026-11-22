@@ -6,7 +6,13 @@ import androidx.core.net.toUri
 import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.Animatable
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.*
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.*
@@ -20,6 +26,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.unit.Constraints
+import androidx.compose.ui.unit.constrainWidth
+import androidx.compose.ui.unit.constrainHeight
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
@@ -67,6 +77,14 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
     val error by viewModel.error.collectAsStateWithLifecycle()
     val submitting by viewModel.submitting.collectAsStateWithLifecycle()
     val busy = chatId in submitting
+    val photoError by viewModel.photoError.collectAsStateWithLifecycle()
+    var selectedPhotos by rememberSaveable(chatId, status.session) { mutableStateOf(arrayListOf<String>()) }
+    var photoCaption by rememberSaveable(chatId, status.session) { mutableStateOf("") }
+    var photoDraftSource by rememberSaveable(chatId, status.session) { mutableStateOf("") }
+    var photoAlbum by rememberSaveable(chatId, status.session) { mutableStateOf(true) }
+    var photoUncertain by rememberSaveable(chatId, status.session) { mutableStateOf(false) }
+    var pickerSession by rememberSaveable { mutableStateOf<Long?>(null) }
+    var pickerChat by rememberSaveable { mutableStateOf<Long?>(null) }
     val listState = rememberLazyListState()
     var previousLastId by rememberSaveable(chatId, status.session) { mutableStateOf<Long?>(null) }
     val context = LocalContext.current
@@ -81,10 +99,19 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
         voiceViewModel?.accepted?.collect { accepted -> if (accepted.chatId == chatId && replyTo == accepted.replyTo) replyTo = null }
     }
     var mediaSelection by rememberSaveable(chatId, status.session) { mutableStateOf<Long?>(null) }
+    val toolRequest by viewModel.chatTool.collectAsStateWithLifecycle()
+    var chatTool by rememberSaveable(chatId, status.session) { mutableStateOf<String?>(null) }
+    var chatSearch by rememberSaveable(chatId, status.session) { mutableStateOf("") }
     val mediaItems = remember(messages, chat?.protectedContent) {
         messages.mapNotNull { message -> message.media?.takeIf { !message.restricted }?.let {
             MediaItem(chatId, message.id, it, message.canSave && chat?.protectedContent != true)
         } }
+    }
+    LaunchedEffect(toolRequest) {
+        val request = toolRequest?.takeIf { it.chatId == chatId } ?: return@LaunchedEffect
+        if (request.name == "media") mediaSelection = mediaItems.lastOrNull()?.messageId
+        else chatTool = request.name
+        viewModel.consumeChatTool(request)
     }
     val scope = rememberCoroutineScope()
     val colors = DefaultDesign.colors
@@ -115,6 +142,16 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
             catch (_: java.io.IOException) { fileError = "Unable to read this file." }
         }
     }
+    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)) { uris ->
+        if (status.live && pickerSession == status.session && pickerChat == chatId && uris.isNotEmpty()) {
+            selectedPhotos = ArrayList(uris.distinct().take(10).map { uri ->
+                runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+                uri.toString()
+            })
+            photoCaption = draft.text; photoDraftSource = draft.text
+            photoAlbum = true; photoUncertain = false; viewModel.clearPhotoError()
+        }
+    }
     LaunchedEffect(messages.lastOrNull()?.id) {
         val last = messages.lastOrNull() ?: return@LaunchedEffect
         if (last.id != previousLastId) {
@@ -130,16 +167,22 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
             itemsIndexed(newestFirst, key = { _, it -> it.id }, contentType = { _, _ -> "message" }) { index, message ->
                 val outgoing = message.outgoing
                 val previous = newestFirst.getOrNull(index + 1)
-                val grouped = previous != null && previous.outgoing == outgoing && previous.senderId == message.senderId
+                val next = newestFirst.getOrNull(index - 1)
+                val position = remember(message.id, message.senderId, message.senderIsChat, message.date, message.isService, previous?.id, previous?.date, previous?.senderId, previous?.isService, next?.id, next?.date, next?.senderId, next?.isService) {
+                    MessageGrouping.position(previous, message, next)
+                }
+                val grouped = position == MessageGroupPosition.MIDDLE || position == MessageGroupPosition.LAST
                 Column {
                 MessageDateSeparator(message.date, previous?.date)
-                Row(Modifier.fillMaxWidth().padding(top = if (grouped) 4.dp else 16.dp).excludeModuleGestures(), horizontalArrangement = if (outgoing) Arrangement.End else Arrangement.Start, verticalAlignment = Alignment.Bottom) {
+                Row(Modifier.fillMaxWidth().padding(top = if (grouped) 2.dp else 8.dp).excludeModuleGestures(), horizontalArrangement = if (outgoing) Arrangement.End else Arrangement.Start, verticalAlignment = Alignment.Bottom) {
                     if (!outgoing && chat?.kind == ChatKind.Group) { ChatAvatar(message.senderName ?: chat.title, 28.dp); Spacer(Modifier.width(8.dp)) }
                     Column {
                     if (!outgoing && !grouped && chat?.kind == ChatKind.Group) message.senderName?.let { Text(it, color = colors.accent, style = MaterialTheme.typography.labelSmall) }
-                    MessageBubble(message, byId[message.replyTo], grouped,
+                    MessageBubble(message, byId[message.replyTo], position,
                         onActions = { actionsFor = message.id }, onReply = { if (!busy && !recording) { editId = null; replyTo = message.id } },
                         onReaction = { viewModel.react(chatId, message.id, it) },
+                        onCancelUpload = { viewModel.cancelPhotoSend(chatId, message.id) },
+                        onRetryUpload = { viewModel.retry(chatId, message.id) },
                         mediaViewModel = mediaViewModel, mediaItem = mediaItems.find { it.messageId == message.id },
                         onMedia = { mediaSelection = message.id },
                         onOpenAttachment = { attachment ->
@@ -175,10 +218,14 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
             onRemoveAttachment = { attachmentUri = null; attachmentName = null; attachmentMime = null },
             error = fileError ?: error,
             onAttach = {
-                if (status.live) fileError = "File uploads are not supported in this Telegram build. Text and voice messages are available."
-                else try { picker.launch(arrayOf("*/*")) }
+                if (status.live) {
+                    pickerSession = status.session; pickerChat = chatId
+                    try { photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
+                    catch (_: ActivityNotFoundException) { fileError = "No system photo picker is available." }
+                } else try { picker.launch(arrayOf("*/*")) }
                 catch (_: ActivityNotFoundException) { fileError = "No document picker is available." }
             },
+            attachmentsEnabled = !status.live || chat?.canSendPhotos == true,
             onSubmit = submit@ {
                 // A stale check-button callback must never become a new-message send.
                 if (editId != editingMessage) return@submit
@@ -204,11 +251,64 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
         )
     }
 
-    mediaSelection?.let { id -> if (mediaViewModel != null) MediaViewer(mediaItems, id, mediaViewModel) { mediaSelection = null } }
+    if (selectedPhotos.isNotEmpty()) PhotoSendPreview(selectedPhotos, photoCaption, photoAlbum, busy, photoUncertain, photoError,
+        viewModel, onCaption = { photoCaption = it; viewModel.clearPhotoError() }, onAlbum = { photoAlbum = it },
+        onRemove = { uri -> viewModel.releasePhotoSelection(listOf(uri)); selectedPhotos = ArrayList(selectedPhotos.filterNot { it == uri }) },
+        onDismiss = { viewModel.releasePhotoSelection(selectedPhotos.toList()); selectedPhotos = arrayListOf(); viewModel.clearPhotoError() }, onSend = {
+            val selection = selectedPhotos.toList()
+            val caption = photoCaption
+            val reply = replyTo
+            val session = status.session
+            viewModel.sendPhotos(chatId, selection, caption, photoAlbum, reply) { result ->
+                if (viewModel.status.value.session == session) {
+                    viewModel.releasePhotoSelection(selection.take(result.accepted))
+                    selectedPhotos = ArrayList(selection.drop(result.accepted))
+                    photoUncertain = result.result == SendResult.Uncertain
+                    if (result.accepted > 0) {
+                        photoCaption = ""
+                        if (draft.text == photoDraftSource) draft = TextFieldValue()
+                        if (replyTo == reply) replyTo = null
+                    }
+                }
+            }
+        })
+    if (chatTool == "info") DefaultDialog("Conversation info", { chatTool = null }) {
+        chat?.let { current ->
+            TelegramAvatar(current.title, current.photo, 64.dp)
+            Text(current.title, color = colors.text, style = MaterialTheme.typography.titleLarge)
+            Text("${current.kind} · ${if (status.live) "Telegram" else "Demo conversation"}", color = colors.secondary)
+            Text("Conversation ID: ${current.id}", color = colors.secondary, style = MaterialTheme.typography.bodySmall)
+        }
+        DefaultAction("Done", { chatTool = null })
+    }
+    if (chatTool == "search") DefaultDialog("Search in chat", { chatTool = null }) {
+        DefaultInput(chatSearch, { chatSearch = it }, "Search loaded messages", Modifier.fillMaxWidth())
+        Text("Searches currently loaded history.", color = colors.secondary, style = MaterialTheme.typography.bodySmall)
+        val matches = remember(messages, chatSearch) { if (chatSearch.isBlank()) emptyList() else messages.filter { it.text.contains(chatSearch.trim(), ignoreCase = true) } }
+        LazyColumn(Modifier.heightIn(max = 300.dp)) {
+            itemsIndexed(matches, key = { _, item -> item.id }) { _, found ->
+                Column(Modifier.fillMaxWidth().clickable {
+                    chatTool = null
+                    val index = newestFirst.indexOfFirst { it.id == found.id }
+                    if (index >= 0) scope.launch { listState.scrollToItem(index) }
+                }.padding(vertical = 12.dp)) {
+                    Text(found.text, color = colors.text, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    Text(found.time, color = colors.secondary, style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+        if (chatSearch.isNotBlank() && matches.isEmpty()) Text("No matching loaded messages", color = colors.secondary)
+        DefaultAction("Done", { chatTool = null })
+    }
+    mediaSelection?.let { id -> if (mediaViewModel != null) MediaViewer(if (mediaItems.find { it.messageId == id }?.media?.kind == MediaKind.Photo) mediaItems.filter { it.media.kind == MediaKind.Photo } else mediaItems, id, mediaViewModel) { mediaSelection = null } }
     byId[actionsFor]?.let { selected ->
         DefaultDialog("Message", { actionsFor = null }) {
             if (!status.live) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 listOf("👍", "❤", "✨").forEach { reaction -> DefaultAction(reaction, { viewModel.react(chatId, selected.id, reaction); actionsFor = null }, Modifier.weight(1f)) }
+            }
+            if (status.live && !selected.restricted && !selected.isService && selected.delivery !in listOf(Delivery.Sending, Delivery.Failed)) {
+                val heartChosen = selected.reactions.any { it.emoji.replace("\uFE0F", "") == "❤" && it.chosen }
+                DefaultAction(if (heartChosen) "Remove ❤ reaction" else "React with ❤", { viewModel.react(chatId, selected.id, "❤"); actionsFor = null }, Modifier.fillMaxWidth())
             }
             DefaultAction("Reply", { editId = null; replyTo = selected.id; actionsFor = null }, Modifier.fillMaxWidth(), enabled = !busy && !recording)
             if (selected.outgoing && selected.text.isNotBlank() && selected.media == null && selected.attachment == null &&
@@ -235,8 +335,8 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageBubble(message: Message, reply: Message?, grouped: Boolean,
-    onActions: () -> Unit, onReply: () -> Unit, onReaction: (String) -> Unit, onOpenAttachment: (Attachment) -> Unit,
+private fun MessageBubble(message: Message, reply: Message?, position: MessageGroupPosition,
+    onActions: () -> Unit, onReply: () -> Unit, onReaction: (String) -> Unit, onCancelUpload: () -> Unit, onRetryUpload: () -> Unit, onOpenAttachment: (Attachment) -> Unit,
     mediaViewModel: MediaViewModel?, mediaItem: MediaItem?, onMedia: () -> Unit,
 ) {
     val outgoing = message.outgoing
@@ -245,8 +345,16 @@ private fun MessageBubble(message: Message, reply: Message?, grouped: Boolean,
     val translation = animateFloatAsState(drag, VectorMotionSpec.replyFollow(LocalAppearance.current), label = "Swipe to reply")
     val replyDistance = with(LocalDensity.current) { 48.dp.toPx() }
     val currentReply by rememberUpdatedState(onReply)
-    val shape = DefaultDesign.messageShape(outgoing, grouped)
-    Column(Modifier.widthIn(max = 310.dp).graphicsLayer { translationX = translation.value }
+    val shape = remember(position, outgoing) { DefaultDesign.messageShape(position, outgoing) }
+    val appearance = LocalAppearance.current
+    val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
+    val pulse = remember(message.id) { Animatable(1f) }
+    var feedbackJob by remember(message.id) { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    val currentReaction by rememberUpdatedState(onReaction)
+    val canDoubleReact = !message.restricted && !message.isService && message.media == null && message.attachment == null &&
+        message.delivery !in listOf(Delivery.Sending, Delivery.Failed)
+    Column(Modifier.widthIn(max = 310.dp).graphicsLayer { translationX = translation.value; scaleX = pulse.value; scaleY = pulse.value }.clip(shape)
         .pointerInput(message.id, replyDistance) {
             detectHorizontalDragGestures(onDragEnd = { if (drag >= replyDistance) currentReply(); drag = 0f }, onDragCancel = { drag = 0f }) { change, amount ->
                 change.consume(); drag = max(0f, drag + amount).coerceAtMost(replyDistance * 1.2f)
@@ -254,47 +362,111 @@ private fun MessageBubble(message: Message, reply: Message?, grouped: Boolean,
         }
         .background(if (outgoing) colors.outgoing else colors.panel.copy(alpha = .78f), shape)
         .then(Modifier.designFrame(shape, tint = if (outgoing) colors.accent.copy(alpha = .30f) else colors.text.copy(alpha = .07f)))
-        .combinedClickable(indication = null, interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, onClick = {}, onLongClick = onActions)
-        .padding(horizontal = 14.dp, vertical = 12.dp)) {
-        if (message.replyTo != null) {
-            Row(Modifier.padding(bottom = 10.dp)) {
-                Box(Modifier.width(2.dp).height(34.dp).background(colors.accent))
-                Column(Modifier.padding(start = 10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                    Text("Reply", style = MaterialTheme.typography.labelSmall, color = colors.accent)
-                    Text(reply?.text?.ifEmpty { reply.attachment?.name.orEmpty() } ?: "Earlier message", color = colors.secondary, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+        .combinedClickable(indication = null, interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, onClick = {}, onLongClick = onActions,
+            onDoubleClick = if (canDoubleReact) ({
+                if (feedbackJob?.isActive != true) {
+                    currentReaction("❤")
+                    if (appearance.haptics) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                    feedbackJob = scope.launch {
+                        try {
+                            pulse.animateTo(VectorMotionSpec.pressScale(.98f, appearance), VectorMotionSpec.lockPeak(appearance))
+                            pulse.animateTo(1f, VectorMotionSpec.feedback(appearance))
+                        } finally { pulse.snapTo(1f) }
+                    }
+                }
+            }) else null)
+        .padding(horizontal = 12.dp, vertical = 8.dp)) {
+        val reactions = message.reactions.ifEmpty { message.reaction?.let { listOf(MessageReaction(it, 1, true)) }.orEmpty() }
+        CompactMessageContent(outgoing, reactions, onReaction) {
+            if (message.replyTo != null) {
+                Row(Modifier.padding(bottom = 10.dp)) {
+                    Box(Modifier.width(2.dp).height(34.dp).background(colors.accent))
+                    Column(Modifier.padding(start = 10.dp), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                        Text("Reply", style = MaterialTheme.typography.labelSmall, color = colors.accent)
+                        Text(reply?.text?.ifEmpty { reply.attachment?.name.orEmpty() } ?: "Earlier message", color = colors.secondary, maxLines = 2, overflow = TextOverflow.Ellipsis, style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
-        }
-        if (mediaItem != null && mediaViewModel != null) {
-            if (mediaItem.media.kind in listOf(MediaKind.Voice, MediaKind.Audio)) com.vector.messenger.feature.audio.VoiceAttachment(mediaItem, mediaViewModel)
-            else MediaAttachmentView(mediaItem, mediaViewModel, onMedia)
-        }
-        message.attachment?.let { attachment -> DefaultAction(attachment.name, { onOpenAttachment(attachment) }, Modifier.padding(bottom = 8.dp), VectorIcons.Attach) }
-        if (message.text.isNotEmpty()) Row {
-            Text(message.text, color = colors.text, style = MaterialTheme.typography.bodyLarge)
-        }
-        Row(Modifier.align(Alignment.End).padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(message.time, style = MaterialTheme.typography.labelSmall, color = colors.secondary)
-            if (outgoing) {
-                Box(Modifier.width(1.dp).height(10.dp).background(colors.line))
-                if (message.delivery == Delivery.LocalDemo) Icon(VectorIcons.Clock, "Stored locally; not sent to Telegram", Modifier.size(12.dp), tint = colors.accent)
-                Text(when (message.delivery) {
-                    Delivery.LocalDemo -> "Local demo"
-                    Delivery.Sending -> "Sending…"
-                    Delivery.Failed -> "Failed"
-                    Delivery.Read -> "✓✓"
-                    Delivery.Sent -> "✓"
-                    else -> ""
-                }, style = MaterialTheme.typography.labelSmall, color = if (message.delivery == Delivery.Read) colors.active else colors.secondary,
-                    modifier = Modifier.semantics { contentDescription = when (message.delivery) {
-                        Delivery.Sent -> "Sent to Telegram"
-                        Delivery.Read -> "Read"
-                        Delivery.Failed -> "Message failed to send"
-                        Delivery.Sending -> "Sending message"
-                        else -> "Local demonstration message"
-                    } })
+            if (mediaItem != null && mediaViewModel != null) {
+                if (mediaItem.media.kind in listOf(MediaKind.Voice, MediaKind.Audio)) com.vector.messenger.feature.audio.VoiceAttachment(mediaItem, mediaViewModel)
+                else MediaAttachmentView(mediaItem, mediaViewModel, onMedia, message.delivery,
+                    onCancelUpload, onRetryUpload, message.canRetry, message.retryAt)
+            }
+            message.attachment?.let { attachment -> DefaultAction(attachment.name, { onOpenAttachment(attachment) }, Modifier.padding(bottom = 8.dp), VectorIcons.Attach) }
+            // Both directions share a bottom-aligned, measured text/time line. Media and
+            // reply previews above retain their width and existing interactive controls.
+            Row(Modifier.align(Alignment.End), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Bottom) {
+                if (message.text.isNotEmpty()) Text(message.text, Modifier.weight(1f, fill = false),
+                    color = colors.text, style = MaterialTheme.typography.bodyLarge)
+                MessageTimestamp(message)
             }
         }
-        message.reaction?.let { reaction -> DefaultAction("$reaction  1", { onReaction(reaction) }, Modifier.padding(top = 8.dp)) }
     }
+}
+
+/** Measure message content first; reactions can wrap within that width rather than stretching it.
+ * Only a single indivisible emoji/count wider than the body may increase the bubble width. */
+@Composable
+private fun CompactMessageContent(
+    outgoing: Boolean, reactions: List<MessageReaction>, onReaction: (String) -> Unit,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    val colors = DefaultDesign.colors
+    Layout(content = {
+        Column(content = content)
+        if (reactions.isNotEmpty()) FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp, if (outgoing) Alignment.End else Alignment.Start),
+            verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            reactions.forEach { reaction -> key(reaction.emoji) {
+                Row(Modifier.heightIn(min = 20.dp)
+                    .clickable(role = Role.Button, onClickLabel = if (reaction.chosen) "Remove ${reaction.emoji} reaction" else "React ${reaction.emoji}") { onReaction(reaction.emoji) }
+                    .semantics { selected = reaction.chosen },
+                    verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(reaction.emoji, fontSize = 13.sp, lineHeight = 16.sp)
+                    Text(reaction.count.toString(), color = if (reaction.chosen) colors.accent else colors.secondary,
+                        fontSize = 11.sp, lineHeight = 14.sp)
+                }
+            } }
+        }
+    }) { measurables, constraints ->
+        val body = measurables[0].measure(constraints.copy(minWidth = 0, minHeight = 0))
+        val reactionContent = measurables.getOrNull(1)
+        val reactionMinimum = reactionContent?.minIntrinsicWidth(Constraints.Infinity)?.coerceAtMost(constraints.maxWidth) ?: 0
+        val width = constraints.constrainWidth(maxOf(body.width, reactionMinimum))
+        val gap = if (reactionContent != null) 1.dp.roundToPx() else 0
+        val remainingHeight = if (constraints.hasBoundedHeight) (constraints.maxHeight - body.height - gap).coerceAtLeast(0) else Constraints.Infinity
+        val reactionRow = reactionContent?.measure(Constraints(minWidth = width, maxWidth = width, maxHeight = remainingHeight))
+        layout(width, constraints.constrainHeight(body.height + gap + (reactionRow?.height ?: 0))) {
+            body.placeRelative(width - body.width, 0)
+            reactionRow?.placeRelative(0, body.height + gap)
+        }
+    }
+}
+
+@Composable
+private fun MessageTimestamp(message: Message, modifier: Modifier = Modifier) {
+    val colors = DefaultDesign.colors
+    val outgoing = message.outgoing
+    Row(modifier.widthIn(max = 112.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(message.time, style = MaterialTheme.typography.labelSmall, color = colors.secondary)
+        if (outgoing) {
+            Box(Modifier.width(1.dp).height(10.dp).background(colors.line))
+            if (message.delivery == Delivery.LocalDemo) Icon(VectorIcons.Clock, "Stored locally; not sent to Telegram", Modifier.size(12.dp), tint = colors.accent)
+            Text(when (message.delivery) {
+                Delivery.LocalDemo -> "Local demo"
+                Delivery.Sending -> "Sending…"
+                Delivery.Failed -> "Failed"
+                Delivery.Read -> "✓✓"
+                Delivery.Sent -> "✓"
+                else -> ""
+            }, style = MaterialTheme.typography.labelSmall, color = if (message.delivery == Delivery.Read) colors.active else colors.secondary,
+                modifier = Modifier.semantics { contentDescription = when (message.delivery) {
+                    Delivery.Sent -> "Sent to Telegram"
+                    Delivery.Read -> "Read"
+                    Delivery.Failed -> "Message failed to send"
+                    Delivery.Sending -> "Sending message"
+                    else -> "Local demonstration message"
+                } })
+        }
+    }
+
 }

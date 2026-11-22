@@ -17,14 +17,15 @@ sealed interface ChatUpdate {
     data class Photo(val id: Long, val photo: ProfilePhoto?) : ChatUpdate
     data class Unread(val id: Long, val count: Int) : ChatUpdate
     data class ReadOutbox(val id: Long, val lastId: Long) : ChatUpdate
-    data class Permissions(val id: Long, val canSend: Boolean) : ChatUpdate
+    data class Permissions(val id: Long, val canSend: Boolean, val canSendPhotos: Boolean = canSend) : ChatUpdate
     data class Protection(val id: Long, val protected: Boolean) : ChatUpdate
     data class Upsert(val message: Message, val oldId: Long? = null) : ChatUpdate
     data class Content(val chatId: Long, val messageId: Long, val text: String, val media: com.vector.core.media.TelegramMedia? = null) : ChatUpdate
     data class Deleted(val chatId: Long, val ids: List<Long>) : ChatUpdate
     data class Reactions(val chatId: Long, val messageId: Long, val reactions: List<MessageReaction>) : ChatUpdate
     data class File(val photo: ProfilePhoto) : ChatUpdate
-    data class Access(val peerId: Long, val supergroup: Boolean, val restricted: Boolean, val canSendOverride: Boolean? = null, val displayName: String? = null) : ChatUpdate
+    data class Access(val peerId: Long, val supergroup: Boolean, val restricted: Boolean, val canSendOverride: Boolean? = null, val displayName: String? = null,
+        val canSendPhotosOverride: Boolean? = canSendOverride) : ChatUpdate
 }
 enum class MessagingFailure { Network, Unavailable, Forbidden }
 class MessagingException(val failure: MessagingFailure) : Exception("Telegram request failed")
@@ -36,6 +37,9 @@ interface TelegramMessagingClient {
     suspend fun history(chatId: Long, fromId: Long, limit: Int): List<Message>
     suspend fun sendText(chatId: Long, text: String, replyTo: Long?): Message
     suspend fun editText(chatId: Long, messageId: Long, text: String): Message = throw MessagingException(MessagingFailure.Unavailable)
+    suspend fun sendPhotos(chatId: Long, photos: List<com.vector.core.media.UploadPhoto>, caption: String, replyTo: Long?): List<Message> = throw MessagingException(MessagingFailure.Unavailable)
+    suspend fun photoPermission(chatId: Long): Boolean = true
+    suspend fun cancelPhotoSend(chatId: Long, messageId: Long) { throw MessagingException(MessagingFailure.Unavailable) }
     suspend fun toggleReaction(chatId: Long, messageId: Long, emoji: String): List<MessageReaction> = throw MessagingException(MessagingFailure.Unavailable)
     suspend fun sendVoice(chatId: Long, clip: com.vector.core.audio.VoiceClip, replyTo: Long?): Message = throw MessagingException(MessagingFailure.Unavailable)
     suspend fun resend(chatId: Long, messageId: Long): List<Message>

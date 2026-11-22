@@ -43,17 +43,20 @@ class TdlibMessagingClient(private val manager: TdlibClientManager) : TelegramMe
         fun sameEmoji(value: String) = value.replace("\uFE0F", "") == emoji.replace("\uFE0F", "")
         suspend fun current() = call(request("getMessage", "chat_id" to chatId, "message_id" to messageId))
         val chosen = mapMessageReactions(current().optJSONObject("interaction_info")).firstOrNull { sameEmoji(it.emoji) && it.chosen }
+        var selectedEmoji = chosen?.emoji ?: emoji
         if (chosen == null) {
             val available = call(request("getMessageAvailableReactions", "chat_id" to chatId, "message_id" to messageId, "row_size" to 8))
             val allowed = listOf("top_reactions", "recent_reactions", "popular_reactions").any { key ->
                 available.optJSONArray(key)?.objects()?.any { reaction ->
                     val type = reaction.optJSONObject("type")
-                    type?.optString("@type") == "reactionTypeEmoji" && sameEmoji(type.safeText("emoji"))
+                    val matches = type?.optString("@type") == "reactionTypeEmoji" && sameEmoji(type.safeText("emoji"))
+                    if (matches) selectedEmoji = type!!.safeText("emoji")
+                    matches
                 } == true
             }
             if (!allowed || available.optJSONObject("unavailability_reason") != null) throw MessagingException(MessagingFailure.Forbidden)
         }
-        val type = request("reactionTypeEmoji", "emoji" to (chosen?.emoji ?: emoji))
+        val type = request("reactionTypeEmoji", "emoji" to selectedEmoji)
         call(if (chosen != null) request("removeMessageReaction", "chat_id" to chatId, "message_id" to messageId, "reaction_type" to type)
             else request("addMessageReaction", "chat_id" to chatId, "message_id" to messageId, "reaction_type" to type,
                 "is_big" to false, "update_recent_reactions" to true))
@@ -66,6 +69,51 @@ class TdlibMessagingClient(private val manager: TdlibClientManager) : TelegramMe
             "reply_markup" to null, "input_message_content" to request("inputMessageText",
                 "text" to request("formattedText", "text" to text, "entities" to JSONArray()),
                 "link_preview_options" to null, "clear_draft" to false))))
+    }
+    override suspend fun photoPermission(chatId: Long): Boolean {
+        val chat = call(request("getChat", "chat_id" to chatId))
+        val type = chat.optJSONObject("type") ?: return false
+        val allowed = chat.optJSONObject("permissions")?.optBoolean("can_send_photos") == true
+        val group = when (type.optString("@type")) {
+            "chatTypeBasicGroup" -> call(request("getBasicGroup", "basic_group_id" to type.optLong("basic_group_id")))
+            "chatTypeSupergroup" -> call(request("getSupergroup", "supergroup_id" to type.optLong("supergroup_id")))
+            "chatTypePrivate" -> return allowed
+            else -> return false
+        }
+        val status = group.optJSONObject("status") ?: return false
+        return when (status.optString("@type")) {
+            "chatMemberStatusCreator" -> true
+            "chatMemberStatusAdministrator" -> !group.optBoolean("is_channel") || status.optJSONObject("rights")?.optBoolean("can_post_messages") == true
+            "chatMemberStatusRestricted" -> status.optBoolean("is_member") && status.optJSONObject("permissions")?.optBoolean("can_send_photos") == true
+            "chatMemberStatusMember" -> allowed
+            else -> false
+        }
+    }
+    override suspend fun sendPhotos(chatId: Long, photos: List<com.vector.core.media.UploadPhoto>, caption: String, replyTo: Long?): List<com.vector.core.Message> {
+        require(photos.size in 1..10)
+        val contents = photos.mapIndexed { index, photo -> request("inputMessagePhoto",
+            "photo" to request("inputPhoto", "photo" to request("inputFileLocal", "path" to photo.path),
+                "thumbnail" to null, "video" to null, "added_sticker_file_ids" to JSONArray(), "width" to photo.width, "height" to photo.height),
+            "caption" to request("formattedText", "text" to if (index == 0) caption else "", "entities" to JSONArray()),
+            "show_caption_above_media" to false, "self_destruct_type" to null, "has_spoiler" to false) }
+        val payload = request(if (photos.size == 1) "sendMessage" else "sendMessageAlbum",
+            "chat_id" to chatId, "topic_id" to null, "options" to null,
+            "reply_to" to replyTo?.let { request("inputMessageReplyToMessage", "message_id" to it, "quote" to null, "checklist_task_id" to 0, "poll_option_id" to "") })
+        if (photos.size == 1) payload.put("reply_markup", JSONObject.NULL).put("input_message_content", contents.single())
+        else payload.put("input_message_contents", JSONArray(contents))
+        val result = call(payload)
+        val messages = if (photos.size == 1) listOf(mapTelegramMessage(result))
+            else result.optJSONArray("messages")?.objects()?.map(::mapTelegramMessage).orEmpty()
+        if (messages.size != photos.size) throw MessagingException(MessagingFailure.Network)
+        return messages
+    }
+    override suspend fun cancelPhotoSend(chatId: Long, messageId: Long) {
+        val message = call(request("getMessage", "chat_id" to chatId, "message_id" to messageId))
+        if (message.optJSONObject("content")?.optString("@type") != "messagePhoto" ||
+            message.optJSONObject("sending_state")?.optString("@type") !in setOf("messageSendingStatePending", "messageSendingStateFailed"))
+            throw MessagingException(MessagingFailure.Forbidden)
+        // Only the temporary sending ID is deleted. Never resolve it to a delivered replacement.
+        call(request("deleteMessages", "chat_id" to chatId, "message_ids" to JSONArray().put(messageId), "revoke" to false))
     }
     override suspend fun sendVoice(chatId: Long, clip: com.vector.core.audio.VoiceClip, replyTo: Long?) = mapTelegramMessage(call(
         voiceMessageRequest(chatId, clip, replyTo)))

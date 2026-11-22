@@ -14,6 +14,8 @@ class SessionChatRepository(
     private val messageState = MutableStateFlow(demo.messages.value)
     private val statusState = MutableStateFlow(ChatStatus())
     private val historyState = MutableStateFlow(HistoryState())
+    private val reactionErrorState = MutableStateFlow<String?>(null)
+    override val reactionError = reactionErrorState.asStateFlow()
     override val chats = chatState.asStateFlow()
     override val messages = messageState.asStateFlow()
     override val status = statusState.asStateFlow()
@@ -36,6 +38,7 @@ class SessionChatRepository(
     private val sends = mutableSetOf<Long>()
     private val retries = mutableSetOf<Long>()
     private val reactionRequests = mutableSetOf<Pair<Long, Long>>()
+    private val photoCancellations = mutableSetOf<Pair<Long, Long>>()
     private var active: Long? = null
     private var atLatest = true
     private var live = false
@@ -45,9 +48,9 @@ class SessionChatRepository(
         scope.launch {
             authentication.state.map { it.step == AuthStep.Ready }.distinctUntilChanged().collectLatest { ready ->
                 epoch++; live = ready; active = null; atLatest = true; historyGeneration++
-                records.clear(); access.clear(); window.clear(); versions.clear(); replaced.clear(); visibleReads.clear(); reactionRequests.clear()
+                records.clear(); access.clear(); window.clear(); versions.clear(); replaced.clear(); visibleReads.clear(); reactionRequests.clear(); reactionErrorState.value = null
                 orderDirty = true; ordered = emptyList()
-                sends.clear(); retries.clear(); avatarRequests.clear(); listJobs.clear(); publish = null; historyJob = null
+                sends.clear(); retries.clear(); photoCancellations.clear(); avatarRequests.clear(); listJobs.clear(); publish = null; historyJob = null
                 messageState.value = if (ready) emptyList() else demo.messages.value
                 chatState.value = if (ready) emptyList() else demo.chats.value
                 historyState.value = HistoryState()
@@ -90,8 +93,9 @@ class SessionChatRepository(
     }
     private fun projected(record: TelegramChat): Chat {
         val rule = access[record.peerId to record.supergroup]
-        return if (rule?.restricted == true) record.chat.copy(preview = "Content unavailable", canSend = false, protectedContent = true, photo = null)
-        else record.chat.copy(canSend = rule?.canSendOverride ?: record.chat.canSend)
+        return if (rule?.restricted == true) record.chat.copy(preview = "Content unavailable", canSend = false, canSendPhotos = false, protectedContent = true, photo = null)
+        else record.chat.copy(canSend = rule?.canSendOverride ?: record.chat.canSend,
+            canSendPhotos = rule?.canSendPhotosOverride ?: record.chat.canSendPhotos)
     }
     private fun change(id: Long, transform: (TelegramChat) -> TelegramChat) {
         val old = records[id] ?: return
@@ -131,7 +135,7 @@ class SessionChatRepository(
             is ChatUpdate.Title -> change(update.id) { it.copy(chat = it.chat.copy(title = update.title)) }
             is ChatUpdate.Photo -> change(update.id) { it.copy(chat = it.chat.copy(photo = update.photo)) }
             is ChatUpdate.Unread -> change(update.id) { it.copy(chat = it.chat.copy(unread = update.count)) }
-            is ChatUpdate.Permissions -> change(update.id) { it.copy(chat = it.chat.copy(canSend = update.canSend)) }
+            is ChatUpdate.Permissions -> change(update.id) { it.copy(chat = it.chat.copy(canSend = update.canSend, canSendPhotos = update.canSendPhotos)) }
             is ChatUpdate.Protection -> change(update.id) { it.copy(chat = it.chat.copy(protectedContent = update.protected)) }
             is ChatUpdate.ReadOutbox -> {
                 change(update.id) { it.copy(lastReadOutbox = update.lastId) }
@@ -146,7 +150,7 @@ class SessionChatRepository(
             }
             is ChatUpdate.Content -> {
                 if (records[update.chatId]?.let { it.lastMessageId == update.messageId && !it.lastRestricted } == true)
-                    change(update.chatId) { it.copy(chat = it.chat.copy(preview = update.text)) }
+                    change(update.chatId) { it.copy(chat = it.chat.copy(preview = update.text.ifEmpty { if (update.media?.kind == com.vector.core.media.MediaKind.Photo) "Photo" else "" })) }
                 if (active == update.chatId) {
                     revision++; versions[update.messageId] = revision
                     window[update.messageId]?.takeUnless { it.restricted }?.let { window[update.messageId] = it.copy(text = update.text, media = update.media) }; publishMessages()
@@ -201,6 +205,14 @@ class SessionChatRepository(
         window.clear(); versions.clear(); replaced.clear(); visibleReads.clear(); messageState.value = emptyList()
         historyState.value = HistoryState(chatId)
         sessionScope?.launch { try { old?.let { client.closeChat(it) }; client.openChat(chatId) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {} }
+        sessionScope?.launch {
+            try {
+                val allowed = client.photoPermission(chatId)
+                ensureActive()
+                if (active == chatId) change(chatId) { it.copy(chat = it.chat.copy(canSendPhotos = allowed)) }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { /* Keep the last confirmed permission; TDLib rechecks on send. */ }
+        }
         loadOlder(chatId)
     }
     override fun closeConversation(chatId: Long) {
@@ -246,6 +258,59 @@ class SessionChatRepository(
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { if ((failure as? MessagingException)?.failure == MessagingFailure.Network) SendResult.Uncertain else SendResult.Failed }
         finally { if (session == epoch) sends.remove(chatId) }
+    }
+    override suspend fun sendPhotos(chatId: Long, photos: List<com.vector.core.media.UploadPhoto>, caption: String, album: Boolean, replyTo: Long?): com.vector.core.media.PhotoSendResult {
+        fun result(value: SendResult, count: Int = 0) = com.vector.core.media.PhotoSendResult(count, value)
+        if (!live) return result(SendResult.Unsupported)
+        if (photos.size !in 1..10 || photos.any { it.width <= 0 || it.height <= 0 || it.path.isBlank() }) return result(SendResult.Empty)
+        if (caption.length > 1024) return result(SendResult.TooLong)
+        if (records[chatId] == null) return result(SendResult.MissingChat)
+        if (!sends.add(chatId)) return result(SendResult.Failed)
+        val session = epoch
+        var accepted = 0
+        return try {
+            if (!client.photoPermission(chatId)) return result(SendResult.Forbidden)
+            val batches = if (album) listOf(photos) else photos.map { listOf(it) }
+            for (batch in batches) {
+                currentCoroutineContext().ensureActive()
+                if (!live || session != epoch) return result(SendResult.MissingChat, accepted)
+                val sent = client.sendPhotos(chatId, batch, if (accepted == 0) caption else "", if (accepted == 0) replyTo else null)
+                currentCoroutineContext().ensureActive()
+                if (!live || session != epoch) return result(SendResult.MissingChat, accepted)
+                sent.forEach { put(it) }; publishMessages()
+                accepted += batch.size
+            }
+            result(SendResult.Sent, accepted)
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { result(when ((failure as? MessagingException)?.failure) {
+            MessagingFailure.Network -> SendResult.Uncertain
+            MessagingFailure.Forbidden -> SendResult.Forbidden
+            else -> SendResult.Failed
+        }, accepted) }
+        finally { if (session == epoch) sends.remove(chatId) }
+    }
+    override fun cancelPhotoSend(chatId: Long, messageId: Long) {
+        val message = window[messageId]?.takeIf { it.chatId == chatId } ?: return
+        if (message.media?.kind != com.vector.core.media.MediaKind.Photo || message.delivery !in listOf(Delivery.Sending, Delivery.Failed)) return
+        val key = chatId to messageId
+        if (!photoCancellations.add(key)) return
+        val session = epoch
+        sessionScope?.launch {
+            try {
+                client.cancelPhotoSend(chatId, messageId)
+                ensureActive()
+                if (session == epoch && active == chatId) {
+                    revision++; versions[messageId] = revision
+                    window.remove(messageId)
+                    replaced += messageId
+                    if (replaced.size > WINDOW * 3) replaced.remove(replaced.first())
+                    publishMessages()
+                }
+            }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { if (session == epoch) reactionErrorState.value = "Unable to cancel this upload. Check its current sending state." }
+            finally { if (session == epoch) photoCancellations.remove(key) }
+        }
     }
     override suspend fun editText(chatId: Long, messageId: Long, text: String): SendResult {
         if (!live) return demo.editText(chatId, messageId, text)
@@ -322,6 +387,7 @@ class SessionChatRepository(
         if (message.restricted || message.isService || message.delivery in listOf(Delivery.Sending, Delivery.Failed)) return
         val key = chatId to messageId
         if (!reactionRequests.add(key)) return
+        reactionErrorState.value = null
         val session = epoch
         sessionScope?.launch {
             try {
@@ -333,7 +399,7 @@ class SessionChatRepository(
                     window[messageId]?.let { window[messageId] = it.copy(reactions = confirmed) }; publishMessages()
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { if (session == epoch) historyState.update { it.copy(error = "This reaction is unavailable or could not be updated.") } }
+            catch (_: Exception) { if (session == epoch) reactionErrorState.value = "This reaction is unavailable or could not be updated." }
             finally { if (session == epoch) reactionRequests.remove(key) }
         }
     }

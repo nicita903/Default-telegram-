@@ -9,6 +9,21 @@ import androidx.compose.ui.unit.dp
 
 /** Small code-native line icons; no additional icon dependency. */
 object VectorIcons {
+    val Emoji by lazy { icon("Emoji") {
+        moveTo(21f, 12f); curveTo(21f, 17f, 17f, 21f, 12f, 21f); curveTo(7f, 21f, 3f, 17f, 3f, 12f)
+        curveTo(3f, 7f, 7f, 3f, 12f, 3f); curveTo(17f, 3f, 21f, 7f, 21f, 12f); close()
+        moveTo(8f, 9f); lineTo(8f, 10f); moveTo(16f, 9f); lineTo(16f, 10f)
+        moveTo(8f, 14f); curveTo(10f, 17f, 14f, 17f, 16f, 14f)
+    } }
+    val Keyboard by lazy { icon("Keyboard") {
+        moveTo(4f, 5f); lineTo(20f, 5f); lineTo(22f, 7f); lineTo(22f, 17f); lineTo(20f, 19f)
+        lineTo(4f, 19f); lineTo(2f, 17f); lineTo(2f, 7f); close()
+        moveTo(6f, 9f); lineTo(6.1f, 9f); moveTo(10f, 9f); lineTo(10.1f, 9f)
+        moveTo(14f, 9f); lineTo(14.1f, 9f); moveTo(18f, 9f); lineTo(18.1f, 9f)
+        moveTo(6f, 12f); lineTo(6.1f, 12f); moveTo(10f, 12f); lineTo(10.1f, 12f)
+        moveTo(14f, 12f); lineTo(14.1f, 12f); moveTo(18f, 12f); lineTo(18.1f, 12f)
+        moveTo(8f, 16f); lineTo(16f, 16f)
+    } }
     val Microphone by lazy { icon("Microphone") { moveTo(9f, 11f); lineTo(9f, 5f); curveTo(9f, 1f, 15f, 1f, 15f, 5f); lineTo(15f, 11f); curveTo(15f, 15f, 9f, 15f, 9f, 11f); moveTo(6f, 10f); curveTo(6f, 20f, 18f, 20f, 18f, 10f); moveTo(12f, 18f); lineTo(12f, 22f); moveTo(8f, 22f); lineTo(16f, 22f) } }
     val Minus by lazy { icon("Decrease") { moveTo(6f, 12f); lineTo(18f, 12f) } }
     private fun icon(name: String, block: PathBuilder.() -> Unit) = ImageVector.Builder(name, 24.dp, 24.dp, 24f, 24f).apply {

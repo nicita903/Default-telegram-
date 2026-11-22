@@ -43,6 +43,10 @@ fun MediaViewer(items: List<MediaItem>, initialId: Long, viewModel: MediaViewMod
         item.media.thumbnail?.let { viewModel.preview(item.copy(media = item.media.copy(file = it, thumbnail = null))) }
         // Opening is an explicit request. Large animations never auto-download inline.
         viewModel.download(item)
+        // Prefetch adjacent small previews only; full-resolution files remain explicit requests.
+        if (item.media.kind == MediaKind.Photo) listOfNotNull(adjacentMedia(items, currentId, -1), adjacentMedia(items, currentId, 1)).forEach { adjacent ->
+            adjacent.media.thumbnail?.let { thumbnail -> viewModel.preview(adjacent.copy(media = adjacent.media.copy(file = thumbnail, thumbnail = null))) }
+        }
     }
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false,
         decorFitsSystemWindows = false, securePolicy = SecureFlagPolicy.SecureOn)) {
