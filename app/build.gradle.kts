@@ -38,6 +38,9 @@ kotlin {
 }
 
 dependencies {
+    implementation("androidx.media3:media3-exoplayer:1.8.0")
+    implementation("androidx.media3:media3-ui:1.8.0")
+    implementation("androidx.media3:media3-session:1.8.0")
     implementation("com.google.zxing:core:3.5.3") // Local QR encoding only; no network or scanner permission.
     implementation(project(":core"))
     implementation(platform("androidx.compose:compose-bom:2025.10.01"))

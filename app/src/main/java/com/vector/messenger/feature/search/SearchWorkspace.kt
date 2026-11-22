@@ -15,7 +15,7 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material3.Icon
+import com.vector.messenger.design.DesignIcon as Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -43,7 +43,7 @@ import com.vector.messenger.navigation.gesture.excludeModuleGestures
 private val LinkPattern = Regex("https?://\\S+")
 
 @Composable
-fun SearchWorkspace(viewModel: SearchViewModel, scope: SearchScope, blockedAttempt: Int, onScope: (SearchScope) -> Unit, onOpen: (Long) -> Unit, listState: LazyListState) {
+fun SearchWorkspace(viewModel: SearchViewModel, scope: SearchScope, blockedAttempt: Int, onScope: (SearchScope) -> Unit, onOpen: (Long) -> Unit, onClose: () -> Unit = {}, listState: LazyListState) {
     val appearance = LocalAppearance.current
     val colors = DefaultDesign.colors
     val chatQuery by viewModel.chatQuery.collectAsStateWithLifecycle()
@@ -70,9 +70,11 @@ fun SearchWorkspace(viewModel: SearchViewModel, scope: SearchScope, blockedAttem
         } finally { highlight = false }
     }
     val lockColor by animateColorAsState(if (highlight) colors.accent else colors.secondary, VectorMotionSpec.feedback(appearance), label = "Search lock feedback")
-    Column(Modifier.fillMaxSize().background(if (scope == SearchScope.Chats) colors.base else colors.panel)
+    Column(Modifier.fillMaxSize().designCanvas(colors.base)
         .graphicsLayer { translationX = bump.value }.imePadding().testTag("search_workspace")) {
         Row(Modifier.fillMaxWidth().searchRegion(SearchRegionKind.Header).padding(horizontal = 20.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            DefaultIconControl(Icons.AutoMirrored.Filled.ArrowBack, "Close search", onClose,
+                Modifier.searchRegion(SearchRegionKind.Excluded), quiet = true)
             Text(if (scope == SearchScope.Chats) "Chat Search" else "Music Search", color = colors.text,
                 style = MaterialTheme.typography.titleMedium, modifier = Modifier.testTag("search_scope").semantics { heading(); stateDescription = if (locked) "Locked" else "Unlocked" })
             AnimatedVisibility(locked && appearance.lockVisible, enter = VectorMotionSpec.lockEnter(appearance), exit = VectorMotionSpec.lockExit(appearance)) {
@@ -162,17 +164,12 @@ private fun MusicSearchResults(viewModel: SearchViewModel, query: String, listSt
     var collection by rememberSaveable { mutableStateOf<String?>(null) }
     var openError by remember { mutableStateOf<String?>(null) }
     SearchChoices(listOf("Songs", "Albums", "Artists", "Playlists", "Recently played", "Recently added", "Telegram music"), category) { category = it; collection = null }
-    val songs = remember(library, query, category, collection) {
-        library.songs.filter { song ->
-            (song.title.contains(query.trim(), true) || song.artist.contains(query.trim(), true) || song.album.contains(query.trim(), true)) && when (category) {
-                "Albums" -> collection == song.album
-                "Artists" -> collection == song.artist
-                "Playlists" -> library.playlists.find { it.id.toString() == collection }?.songIds?.contains(song.id) == true
-                "Recently played", "Telegram music" -> false
-                else -> true
-            }
-        }.let { if (category == "Recently added") it.sortedByDescending { song -> song.added }.take(50) else it }
-    }
+    val filter = remember { kotlinx.coroutines.flow.MutableStateFlow(com.vector.messenger.feature.music.MusicFilter(category)) }
+    LaunchedEffect(query, category, collection) { filter.value = com.vector.messenger.feature.music.MusicFilter(category, collection, query) }
+    val matches by remember(viewModel, filter) { viewModel.musicMatches(filter) }.collectAsStateWithLifecycle(initialValue = emptyList<LocalSong>() to emptyList<Pair<String, String>>())
+    val songs = matches.first
+    val names = matches.second
+    val musicPlayer = com.vector.messenger.feature.music.LocalMusicViewModel.current
     LazyColumn(Modifier.fillMaxSize().searchRegion(SearchRegionKind.Results).testTag("music_results"), state = listState, contentPadding = PaddingValues(20.dp)) {
         item { SearchCaption("On this device") }
         if (!library.permission) item {
@@ -182,23 +179,16 @@ private fun MusicSearchResults(viewModel: SearchViewModel, query: String, listSt
         library.error?.let { item { SearchCaption(it) } }
         openError?.let { item { SearchCaption(it) } }
         if (collection != null) item { DefaultAction("All ${category.lowercase()}", { collection = null }, Modifier.searchRegion(SearchRegionKind.Excluded), icon = Icons.AutoMirrored.Filled.ArrowBack) }
-        if (library.permission && collection == null && category in listOf("Albums", "Artists", "Playlists")) {
-            val names = when (category) {
-                "Albums" -> library.songs.map { it.album }.distinct().map { it to it }
-                "Artists" -> library.songs.map { it.artist }.distinct().map { it to it }
-                else -> library.playlists.map { it.id.toString() to it.name }
-            }.filter { it.second.contains(query.trim(), true) }
+        if (collection == null && category in listOf("Albums", "Artists", "Playlists")) {
             items(names, key = { "collection:${it.first}" }) { (id, name) -> SearchResultRow(name, category.dropLast(1), VectorIcons.Music) { collection = id } }
             if (names.isEmpty()) item { SearchCaption("No ${category.lowercase()} found") }
         } else {
-            items(songs, key = { it.id }) { song -> SearchResultRow(song.title, "${song.artist} · ${song.album}", VectorIcons.Music) {
-                try { context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(song.uri.toUri(), "audio/*").addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
-                catch (_: ActivityNotFoundException) { openError = "No audio player is available." }
-                catch (_: SecurityException) { openError = "Audio access changed. Allow access again."; viewModel.refreshMusic() }
+            items(songs, key = { it.key }) { song -> SearchResultRow(song.title, "${song.artist} · ${song.album}", VectorIcons.Music) {
+                if (musicPlayer != null) musicPlayer.play(songs, song.key) else openError = "Open the Music module to play this track."
             } }
             if (library.permission && songs.isEmpty()) item { SearchCaption(when (category) {
-                "Recently played" -> "No playback history. This client does not track external player history."
-                "Telegram music" -> "No imported Telegram music. Telegram audio importing is not connected yet."
+                "Recently played" -> "No music played in Default yet."
+                "Telegram music" -> "No eligible completed Telegram audio downloads."
                 else -> "No local songs found"
             }) }
         }
@@ -211,8 +201,11 @@ private fun SearchCaption(text: String) { Text(text, color = DefaultDesign.color
 @Composable
 private fun SearchChoices(options: List<String>, selected: String, onSelect: (String) -> Unit) {
     Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).excludeModuleGestures().searchRegion(SearchRegionKind.Excluded).padding(horizontal = 12.dp)) {
-        options.forEach { choice -> Text(choice, color = if (selected == choice) DefaultDesign.colors.accent else DefaultDesign.colors.secondary,
-            style = MaterialTheme.typography.labelLarge, modifier = Modifier.heightIn(min = 48.dp).semantics { this.selected = selected == choice }.clickable(role = Role.Tab) { onSelect(choice) }.padding(12.dp)) }
+        options.forEach { choice -> Text(choice, color = if (selected == choice) DefaultDesign.colors.active else DefaultDesign.colors.secondary,
+            style = MaterialTheme.typography.labelLarge, modifier = Modifier.heightIn(min = 48.dp)
+                .background(if (selected == choice) DefaultDesign.colors.raised else androidx.compose.ui.graphics.Color.Transparent,
+                    DefaultDesign.selectionShape)
+                .semantics { this.selected = selected == choice }.clickable(role = Role.Tab) { onSelect(choice) }.padding(12.dp)) }
     }
 }
 
@@ -221,7 +214,7 @@ private fun SearchResultRow(title: String, subtitle: String, icon: androidx.comp
     Row(Modifier.fillMaxWidth().clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null, onClick = onClick)
         .heightIn(min = if (LocalAppearance.current.compact) 64.dp else 80.dp).padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         if (avatar != null) ChatAvatar(avatar, 40.dp)
-        else Box(Modifier.size(40.dp).background(DefaultDesign.colors.raised, androidx.compose.foundation.shape.CircleShape), contentAlignment = Alignment.Center) { Icon(icon, null, Modifier.size(18.dp), tint = DefaultDesign.colors.accent) }
+        else Box(Modifier.size(40.dp).background(DefaultDesign.colors.raised, DefaultDesign.avatarShape), contentAlignment = Alignment.Center) { Icon(icon, null, Modifier.size(18.dp), tint = DefaultDesign.colors.accent) }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(title, color = DefaultDesign.colors.text, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(subtitle, color = DefaultDesign.colors.secondary, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)

@@ -39,13 +39,13 @@ class SearchScrollRestorationUiTest {
                 @Suppress("UNCHECKED_CAST")
                 override fun <T : ViewModel> create(modelClass: Class<T>): T = when (modelClass) {
                     ChatsViewModel::class.java -> ChatsViewModel(repository)
-                    else -> SearchViewModel(SavedStateHandle(), repository, MusicLibraryRepository(compose.activity.applicationContext))
+                    else -> SearchViewModel(SavedStateHandle(), repository, MusicLibraryRepository(compose.activity.applicationContext, compose.activity.lifecycleScope))
                 } as T
             })
             val chats = provider.get("fixtureChats", ChatsViewModel::class.java)
             val search = provider.get("fixtureSearch", SearchViewModel::class.java)
             compose.activity.setContent {
-                DefaultTheme(ThemeMode.Dark) {
+                DefaultTheme {
                     list = rememberLazyListState()
                     val visible = remember { MutableTransitionState(false) }
                     LaunchedEffect(open.value) { visible.targetState = open.value }

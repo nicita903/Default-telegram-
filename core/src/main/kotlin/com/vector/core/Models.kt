@@ -18,12 +18,12 @@ data class Message(
     val date: Long = 0, val outgoing: Boolean = delivery != Delivery.Received,
     val canRetry: Boolean = false, val retryAt: Long = 0, val canSave: Boolean = true, val restricted: Boolean = false,
     val senderId: Long = 0, val senderName: String? = null,
+    val media: com.vector.core.media.TelegramMedia? = null,
 ) { override fun toString() = "Message([redacted])" }
 data class GhostPreferences(
     val suppressTyping: Boolean = false, val suppressRecording: Boolean = false,
     val hideOnline: Boolean = false, val hideLastSeen: Boolean = false,
 )
-enum class ThemeMode { System, Dark, Light }
 enum class ChatFilter { All, Unread, Groups, Channels, Archived }
 
 fun filterChats(chats: List<Chat>, query: String, filter: ChatFilter): List<Chat> = chats

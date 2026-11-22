@@ -3,7 +3,6 @@ package com.vector.messenger
 import androidx.compose.runtime.*
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
-import com.vector.core.ThemeMode
 import com.vector.core.ghost.*
 import com.vector.messenger.design.DefaultTheme
 import com.vector.messenger.feature.SelectiveGhostScreen
@@ -16,21 +15,21 @@ class SelectiveGhostUiTest {
         val saved = mutableStateOf(GhostSaved())
         val contacts = listOf(GhostContact(10, "Fixture A", "fixture_a"), GhostContact(11, "Fixture B"))
         var applied = false
-        compose.setContent { DefaultTheme(ThemeMode.Dark) {
+        compose.setContent { DefaultTheme {
             SelectiveGhostScreen(GhostState(true, true, contacts = contacts, saved = saved.value, serverLoaded = true),
                 { saved.value = saved.value.copy(enabled = it) },
                 { saved.value = saved.value.copy(contacts = saved.value.contacts + (it to ContactPrivacy())) },
                 { saved.value = saved.value.copy(contacts = saved.value.contacts - it) },
                 { id, value -> saved.value = saved.value.copy(contacts = saved.value.contacts + (id to value)) }, {}, { applied = true }, {})
         } }
-        compose.onNodeWithText("Enable Ghost Mode").performClick().assertIsOn()
+        compose.onNodeWithText("Enable local suppression").performClick().assertIsOn()
         compose.onNodeWithTag("privacy_scroll").performScrollToNode(hasContentDescription("Search Telegram contacts"))
         compose.onNodeWithContentDescription("Search Telegram contacts").performTextInput("fixture_a")
         compose.onNodeWithContentDescription("Select Fixture B for Ghost Mode").assertDoesNotExist()
         compose.onNodeWithTag("privacy_scroll").performScrollToNode(hasContentDescription("Select Fixture A for Ghost Mode"))
         compose.onNodeWithContentDescription("Select Fixture A for Ghost Mode").performClick()
-        compose.onNodeWithTag("privacy_scroll").performScrollToNode(hasText("Hide exact Last Seen & Online · Fixture A"))
-        compose.onNodeWithText("Hide exact Last Seen & Online · Fixture A").performClick().assertIsOn()
+        compose.onNodeWithTag("privacy_scroll").performScrollToNode(hasText("Request Last Seen & Online exclusion · Fixture A"))
+        compose.onNodeWithText("Request Last Seen & Online exclusion · Fixture A").performClick().assertIsOn()
         compose.onNodeWithTag("privacy_scroll").performScrollToNode(hasText("Apply privacy changes"))
         compose.onNodeWithText("Apply privacy changes").performClick()
         compose.runOnIdle { Assert.assertTrue(applied); Assert.assertTrue(saved.value.contacts.getValue(10).status) }
@@ -42,7 +41,7 @@ class SelectiveGhostUiTest {
     @Test fun conflictRequiresExplicitReviewAndBusyStateDisablesServerChanges() {
         val state = mutableStateOf(GhostState(authenticated = true, initialized = true, conflict = true))
         var kept = false
-        compose.setContent { DefaultTheme(ThemeMode.Dark) {
+        compose.setContent { DefaultTheme {
             SelectiveGhostScreen(state.value, {}, {}, {}, { _, _ -> }, {}, {}, { kept = true })
         } }
         compose.onNodeWithText("Apply privacy changes").assertIsNotEnabled()
@@ -50,7 +49,24 @@ class SelectiveGhostUiTest {
         compose.onNodeWithText("Keep current server rules").performClick()
         compose.runOnIdle { Assert.assertTrue(kept); state.value = state.value.copy(busy = true) }
         compose.onNodeWithText("Keep current server rules").assertIsNotEnabled()
-        compose.onNodeWithTag("privacy_scroll").performScrollToNode(hasText("Enable Ghost Mode"))
-        compose.onNodeWithText("Enable Ghost Mode").assertIsNotEnabled()
+        compose.onNodeWithTag("privacy_scroll").performScrollToNode(hasText("Enable local suppression"))
+        compose.onNodeWithText("Enable local suppression").assertIsNotEnabled()
+    }
+    @Test fun requestedVisibilityIsNotDisplayedAsEnabledWithoutVerifiedRules() {
+        val saved = GhostSaved(contacts = mapOf(10L to ContactPrivacy(status = true)))
+        val state = mutableStateOf(GhostState(authenticated = true, initialized = true,
+            contacts = listOf(GhostContact(10, "Fixture A")), saved = saved, visibility = mapOf(10L to CapabilityStatus.Enabled)))
+        compose.setContent { DefaultTheme {
+            SelectiveGhostScreen(state.value, {}, {}, {}, { _, _ -> }, {}, {}, {})
+        } }
+        fun row(value: String) { compose.onNodeWithTag("privacy_scroll").performScrollToNode(hasText(value)); compose.onNodeWithText(value).assertIsDisplayed() }
+        row("Telegram exclusion · Unsupported")
+        compose.runOnIdle { state.value = state.value.copy(visibility = mapOf(10L to CapabilityStatus.Enabled), serverLoaded = true) }
+        row("Telegram exclusion · Enabled")
+        compose.runOnIdle { state.value = state.value.copy(busy = true, operation = GhostOperation.Applying) }
+        row("Telegram exclusion · Applying")
+        compose.runOnIdle { state.value = state.value.copy(busy = false, operation = GhostOperation.Idle, serverError = "Fixture failure") }
+        row("Telegram exclusion · Failed")
+        row("Hide all read receipts · Unsupported")
     }
 }

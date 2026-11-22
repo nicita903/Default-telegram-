@@ -19,6 +19,8 @@ internal fun decodePrivacyRules(array: JSONArray): List<PrivacyRule> = array.obj
     val users = rule.optJSONArray("user_ids")
     if (rule.optString("@type") == "userPrivacySettingRuleRestrictUsers")
         PrivacyRule.DenyUsers((0 until (users?.length() ?: 0)).map { users!!.getLong(it) }.toSortedSet())
+    else if (rule.optString("@type") == "userPrivacySettingRuleAllowUsers")
+        PrivacyRule.AllowUsers((0 until (users?.length() ?: 0)).map { users!!.getLong(it) }.toSortedSet())
     else {
         // User-id order is immaterial; normalize known set-valued fields without dropping unknown fields.
         if (users != null) rule.put("user_ids", JSONArray((0 until users.length()).map { users.getLong(it) }.sorted()))
@@ -28,13 +30,14 @@ internal fun decodePrivacyRules(array: JSONArray): List<PrivacyRule> = array.obj
 internal fun encodePrivacyRules(rules: List<PrivacyRule>) = JSONArray().apply {
     rules.forEach { rule -> put(when (rule) {
         is PrivacyRule.DenyUsers -> request("userPrivacySettingRuleRestrictUsers", "user_ids" to JSONArray(rule.ids.sorted()))
+        is PrivacyRule.AllowUsers -> request("userPrivacySettingRuleAllowUsers", "user_ids" to JSONArray(rule.ids.sorted()))
         is PrivacyRule.Other -> JSONObject(rule.json)
     }) }
 }
 internal fun ghostContact(user: JSONObject, manager: TdlibClientManager): GhostContact = GhostContact(
     user.getLong("id"), listOf(user.safeText("first_name"), user.safeText("last_name")).filter(String::isNotBlank).joinToString(" ").ifBlank { "Unnamed Telegram contact" },
     user.optJSONObject("usernames")?.optJSONArray("active_usernames")?.optString(0)?.takeIf { it.isNotBlank() },
-    user.optJSONObject("profile_photo")?.optJSONObject("small")?.let(manager::messagingPhoto))
+    user.optJSONObject("profile_photo")?.optJSONObject("small")?.let(manager::messagingPhoto), premium = user.optBoolean("is_premium"))
 
 class TdlibGhostClient(private val manager: TdlibClientManager) : GhostClient {
     private val setting get() = request("userPrivacySettingShowStatus")

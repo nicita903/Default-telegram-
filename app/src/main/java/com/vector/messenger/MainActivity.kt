@@ -10,10 +10,8 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.core.view.WindowCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.vector.core.ThemeMode
 import com.vector.messenger.design.DefaultTheme
 import com.vector.messenger.feature.ChatsViewModel
 import com.vector.messenger.feature.PreferencesViewModel
@@ -34,24 +32,39 @@ class MainActivity : ComponentActivity() {
     private val authentication: AuthenticationViewModel by viewModels()
     private val profile: ProfileViewModel by viewModels()
     private val search: SearchViewModel by viewModels()
+    private val media: com.vector.messenger.feature.media.MediaViewModel by viewModels()
+    private val audio: com.vector.messenger.feature.audio.AudioViewModel by viewModels()
+    private val voice: com.vector.messenger.feature.audio.VoiceViewModel by viewModels()
+    private val music: com.vector.messenger.feature.music.MusicViewModel by viewModels()
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent); setIntent(intent)
+        if (intent.getBooleanExtra("open_music_player", false)) music.openPlayer()
+    }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         val account = authentication // Starts/restores the process-owned Telegram session asynchronously.
         setContent {
-            val theme by preferences.theme.collectAsStateWithLifecycle()
-            val dark = theme == ThemeMode.Dark.name || (theme == ThemeMode.System.name && isSystemInDarkTheme())
+            val appearance by preferences.appearance.collectAsStateWithLifecycle()
             SideEffect {
+                // Aurora owns a single dark canvas; the system bars never switch to light icons.
                 WindowCompat.getInsetsController(window, window.decorView).apply {
-                    isAppearanceLightStatusBars = !dark
-                    isAppearanceLightNavigationBars = !dark
+                    isAppearanceLightStatusBars = false
+                    isAppearanceLightNavigationBars = false
                 }
             }
             var accountOpen by remember { mutableStateOf(false) }
-            val appearance by preferences.appearance.collectAsStateWithLifecycle()
-            CompositionLocalProvider(LocalAppearance provides accessibleAppearance(appearance)) {
-            DefaultTheme(ThemeMode.valueOf(theme)) {
+            CompositionLocalProvider(LocalAppearance provides accessibleAppearance(appearance),
+                com.vector.messenger.feature.media.LocalMediaViewModel provides media,
+                com.vector.messenger.feature.audio.LocalAudioViewModel provides audio,
+                com.vector.messenger.feature.audio.LocalVoiceViewModel provides voice,
+                com.vector.messenger.feature.music.LocalMusicViewModel provides music) {
+            DefaultTheme {
                 DefaultApp(chats, preferences, search, onAccount = { accountOpen = true })
+                com.vector.messenger.feature.audio.AudioLifecycle()
+                com.vector.messenger.feature.music.NowPlayingHost()
+                androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) { music.refresh() }
+                androidx.compose.runtime.LaunchedEffect(Unit) { if (intent.getBooleanExtra("open_music_player", false)) music.openPlayer() }
                 if (accountOpen) AuthenticationDialog(account, profile, onClose = { accountOpen = false })
             }
             }

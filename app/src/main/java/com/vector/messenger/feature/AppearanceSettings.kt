@@ -19,6 +19,7 @@ data class AppearanceSettings(
     val autoLock: Boolean = true, val lockVisible: Boolean = true, val elastic: Boolean = true,
     val compact: Boolean = true, val accent: Int = 0, val intensity: Int = 100,
     val reducedMotion: Boolean = false, val typeScale: Int = 100,
+    val amoledBlack: Boolean = false, val glassBlur: Int = 2,
 )
 
 /** Shared bounds for loading and live updates: malformed configuration cannot disable navigation. */
@@ -27,6 +28,7 @@ fun AppearanceSettings.normalized() = copy(
     speed = speed.coerceIn(50, 150), pullDistance = pullDistance.coerceIn(48, 120),
     sensitivity = sensitivity.coerceIn(70, 140), accent = accent.coerceIn(0, 2),
     intensity = intensity.coerceIn(0, 100), typeScale = typeScale.coerceIn(85, 130),
+    glassBlur = glassBlur.coerceIn(0, 3),
 )
 
 fun AppearanceSettings.respectingSystemMotion(animationsEnabled: Boolean) =
@@ -36,8 +38,6 @@ val LocalAppearance = staticCompositionLocalOf { AppearanceSettings() }
 
 interface AppearancePreferences {
     val state: StateFlow<AppearanceSettings>
-    val theme: StateFlow<String>
-    fun theme(value: String)
     fun update(change: (AppearanceSettings) -> AppearanceSettings)
 }
 
@@ -55,14 +55,9 @@ class AppearanceStore @Inject constructor(@ApplicationContext context: Context) 
         elastic = prefs.getBoolean("elastic", true), compact = prefs.getBoolean("compact", true),
         accent = prefs.getInt("accent", 0), intensity = prefs.getInt("intensity", 100),
         reducedMotion = prefs.getBoolean("reducedMotion", false), typeScale = prefs.getInt("typeScale", 100),
+        amoledBlack = prefs.getBoolean("amoledBlack", false), glassBlur = prefs.getInt("glassBlur", 2),
     ).normalized())
     override val state = mutable.asStateFlow()
-    private val themeState = MutableStateFlow(prefs.getString("theme", "System")?.takeIf { it in listOf("System", "Dark", "Light") } ?: "System")
-    override val theme = themeState.asStateFlow()
-    override fun theme(value: String) {
-        if (value !in listOf("System", "Dark", "Light")) return
-        themeState.value = value; prefs.edit { putString("theme", value) }
-    }
     @Synchronized
     override fun update(change: (AppearanceSettings) -> AppearanceSettings) {
         val next = change(mutable.value).normalized()
@@ -74,6 +69,10 @@ class AppearanceStore @Inject constructor(@ApplicationContext context: Context) 
             .putBoolean("fastSearch", next.fastSearch).putInt("sensitivity", next.sensitivity)
             .putBoolean("autoLock", next.autoLock).putBoolean("lockVisible", next.lockVisible).putBoolean("elastic", next.elastic)
             .putBoolean("compact", next.compact).putInt("accent", next.accent).putInt("intensity", next.intensity)
-            .putBoolean("reducedMotion", next.reducedMotion).putInt("typeScale", next.typeScale) }
+            .putBoolean("reducedMotion", next.reducedMotion).putInt("typeScale", next.typeScale)
+            .putBoolean("amoledBlack", next.amoledBlack).putInt("glassBlur", next.glassBlur)
+            // Removed controls: dropped on the next write so an old install cannot revive them.
+            .remove("glassEffects").remove("glassOpacity")
+            .remove("glassBorders").remove("reducedTransparency") }
     }
 }

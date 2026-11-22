@@ -11,11 +11,12 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Search
-import androidx.compose.material3.Icon
+import com.vector.messenger.design.DesignIcon as Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -39,10 +40,8 @@ import com.vector.messenger.navigation.gesture.pullToSearch
 @Composable
 fun ChatsScreen(viewModel: ChatsViewModel, onSelect: (Long) -> Unit, onSearch: () -> Unit = {}, listState: LazyListState = rememberLazyListState()) {
     val chats by viewModel.filteredChats.collectAsStateWithLifecycle()
-    val allChats by viewModel.chats.collectAsStateWithLifecycle()
     val status by viewModel.status.collectAsStateWithLifecycle()
     val filter by viewModel.selectedFilter.collectAsStateWithLifecycle()
-    var newMessage by remember { mutableStateOf(false) }
     var selectedChat by rememberSaveable(status.session) { mutableStateOf<Long?>(null) }
     val colors = DefaultDesign.colors
     val appearance = LocalAppearance.current
@@ -57,7 +56,7 @@ fun ChatsScreen(viewModel: ChatsViewModel, onSelect: (Long) -> Unit, onSearch: (
     }
     Column(Modifier.fillMaxSize()) {
 
-        // Chats header
+        // Chats header: the New chat control lives in the app header now, so this row is the count.
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -70,64 +69,8 @@ fun ChatsScreen(viewModel: ChatsViewModel, onSelect: (Long) -> Unit, onSearch: (
                 color = colors.secondary,
                 modifier = Modifier.weight(1f)
             )
-
-            DefaultAction(
-                text = "New chat",
-                onClick = { newMessage = true },
-                modifier = Modifier.excludeModuleGestures(),
-                emphasized = true,
-                compact = true
-            )
         }
 
-        // Chat folders
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
-                .excludeModuleGestures()
-        ) {
-            ChatFilter.entries.forEach { folder ->
-
-                val active = folder == filter
-                val interaction = remember { MutableInteractionSource() }
-
-                Column(
-                    modifier = Modifier
-                        .width(IntrinsicSize.Max)
-                        .widthIn(min = 76.dp)
-                        .selectableFolder(active, interaction) {
-                            viewModel.filter(folder)
-                        }
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .heightIn(min = 48.dp)
-                            .padding(horizontal = 20.dp, vertical = 14.dp),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Text(
-                            text = if (folder == ChatFilter.All) "All chats" else folder.name,
-                            style = MaterialTheme.typography.labelLarge,
-                            color = if (active) colors.accent else colors.secondary,
-                            maxLines = 1
-                        )
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 20.dp)
-                            .height(2.dp)
-                            .background(
-                                if (active) colors.accent else Color.Transparent
-                            )
-                    )
-                }
-            }
-        }
-
-        DefaultRule()
         status.error?.let { DefaultAction(it, viewModel::moreChats, Modifier.padding(horizontal = 20.dp)) }
         if (chats.isEmpty()) {
             EmptyState(if (status.live && status.loading) "Loading Telegram chats…" else "No conversations", if (status.live) "Your Telegram chats appear here." else "Try a different search or folder.")
@@ -148,15 +91,7 @@ fun ChatsScreen(viewModel: ChatsViewModel, onSelect: (Long) -> Unit, onSearch: (
         }
         }
     }
-    if (newMessage) DefaultDialog("New message", onDismiss = { newMessage = false }) {
-        Text(if (status.live) "Choose a Telegram conversation" else "Choose a sample contact", color = colors.secondary, style = MaterialTheme.typography.bodyMedium)
-        Box(Modifier.weight(1f, fill = false)) { ContactsScreen(allChats.filter { it.isContact }) { newMessage = false; onSelect(it) } }
-        DefaultAction("Cancel", { newMessage = false }, Modifier.fillMaxWidth())
-    }
 }
-
-private fun Modifier.selectableFolder(active: Boolean, source: MutableInteractionSource, click: () -> Unit) =
-    semantics { selected = active }.clickable(interactionSource = source, indication = null, role = Role.Tab, onClick = click)
 
 @Composable
 private fun ChatRow(chat: Chat, selected: Boolean, onClick: () -> Unit, onPin: () -> Unit, onArchive: () -> Unit) {
@@ -164,29 +99,29 @@ private fun ChatRow(chat: Chat, selected: Boolean, onClick: () -> Unit, onPin: (
     val colors = DefaultDesign.colors
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val fill by animateColorAsState(if (pressed) colors.raised else if (selected) colors.panel else colors.base, VectorMotionSpec.feedback(LocalAppearance.current), label = "Conversation selection")
+    val fill by animateColorAsState(if (pressed) colors.raised.copy(alpha = .55f) else if (selected) colors.panel.copy(alpha = .35f) else Color.Transparent, VectorMotionSpec.feedback(LocalAppearance.current), label = "Conversation selection")
     val scale = animateFloatAsState(if (pressed) VectorMotionSpec.pressScale(VectorMotionSpec.RowPress) else 1f, VectorMotionSpec.press(pressed, LocalAppearance.current), label = "Conversation compression")
     Row(Modifier.fillMaxWidth().graphicsLayer { scaleX = scale.value; scaleY = scale.value }
         .background(fill).semantics { this.selected = selected }
         .clickable(interactionSource = interaction, indication = null, onClick = onClick).heightIn(min = if (LocalAppearance.current.compact) 72.dp else 88.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.width(2.dp).height(38.dp).background(if (selected) colors.accent else Color.Transparent))
         Spacer(Modifier.width(18.dp))
-        TelegramAvatar(chat.title, chat.photo, 46.dp)
+        TelegramAvatar(chat.title, chat.photo, 52.dp)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f).padding(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
                 Text(chat.title, fontWeight = if (chat.unread > 0) FontWeight.SemiBold else FontWeight.Medium,
                     color = colors.text, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(chat.time, style = MaterialTheme.typography.labelSmall, color = if (chat.unread > 0) colors.accent else colors.secondary)
+                Text(chat.time, style = MaterialTheme.typography.labelSmall, color = if (chat.unread > 0) colors.active else colors.secondary)
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val prefix = when (chat.kind) { ChatKind.Contact -> ""; ChatKind.Group -> "Group · "; ChatKind.Channel -> "Channel · " }
                 Text(prefix + chat.preview, color = colors.secondary, style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
                 if (chat.pinned) Icon(VectorIcons.Pin, "Pinned conversation", Modifier.size(13.dp), tint = colors.secondary)
-                if (chat.unread > 0) Box(Modifier.background(colors.accent.copy(alpha = .13f), CircleShape).defaultMinSize(24.dp, 22.dp)
+                if (chat.unread > 0) Box(Modifier.background(colors.accent, DefaultDesign.avatarShape).defaultMinSize(24.dp, 22.dp)
                     .semantics { contentDescription = "${chat.unread} unread messages" }.padding(horizontal = 5.dp), contentAlignment = Alignment.Center) {
-                    Text(chat.unread.toString(), style = MaterialTheme.typography.labelSmall, color = colors.accent)
+                    Text(chat.unread.toString(), style = MaterialTheme.typography.labelSmall, color = colors.onAccent)
                 }
             }
         }

@@ -22,7 +22,7 @@ class AppearancePersistenceTest {
                 zoom = 8, speed = 125, pullSearch = false, pullDistance = 96, dismissSearch = false,
                 fastSearch = false, sensitivity = 120, autoLock = false, lockVisible = false, elastic = false,
                 compact = false, accent = 2, intensity = 75, reducedMotion = true, typeScale = 115)
-            store.update { expected }; store.theme("Light")
+            store.update { expected }
             assertEquals(expected, store.state.value)
             // Barrier waits for queued apply() writes; subsequent construction uses the persisted file.
             assertTrue(context.getSharedPreferences("appearance_v2", Context.MODE_PRIVATE).edit().commit())
@@ -31,15 +31,13 @@ class AppearancePersistenceTest {
             assertTrue(persisted.contains("name=\"typeScale\" value=\"115\""))
             val restored = AppearanceStore(context)
             assertEquals(expected, restored.state.value)
-            assertEquals("Light", restored.theme.value)
-            restored.theme("invalid"); assertEquals("Light", restored.theme.value)
             restored.update { it.copy(speed = 0, distance = 999, accent = -1) }
             assertEquals(50, restored.state.value.speed)
             assertEquals(60, AppearanceStore(context).state.value.distance)
             assertEquals(0, AppearanceStore(context).state.value.accent)
         } finally { target.deleteSharedPreferences(name) }
     }
-    @Test fun olderPreferenceFilesReceiveSafeDismissalDefault() {
+    @Test fun legacyDesignAndThemeKeysAreIgnoredRatherThanApplied() {
         val target = InstrumentationRegistry.getInstrumentation().targetContext
         val name = "appearance_migration_test"
         val context = object : ContextWrapper(target) {
@@ -48,6 +46,25 @@ class AppearancePersistenceTest {
         try {
             target.getSharedPreferences(name, Context.MODE_PRIVATE).edit().clear().putInt("distance", 28).commit()
             assertTrue(AppearanceStore(context).state.value.dismissSearch)
+            assertEquals(AppearanceSettings(), AppearanceStore(context).state.value)
+            // Files written by the removed three-design, light/dark builds must not resurrect them.
+            context.getSharedPreferences(name, Context.MODE_PRIVATE).edit()
+                .putString("interfaceDesign", "SoftConsole").putString("theme", "Light").commit()
+            assertEquals(AppearanceSettings(), AppearanceStore(context).state.value)
+            context.getSharedPreferences(name, Context.MODE_PRIVATE).edit()
+                .putString("interfaceDesign", "TelegramGlass").putString("theme", "invalid").commit()
+            assertEquals(AppearanceSettings(), AppearanceStore(context).state.value)
+            // Removed glass controls: a stale value must neither load nor survive the next save.
+            context.getSharedPreferences(name, Context.MODE_PRIVATE).edit()
+                .putBoolean("glassEffects", false).putInt("glassOpacity", 40)
+                .putBoolean("glassBorders", false).putBoolean("reducedTransparency", true).commit()
+            assertEquals(AppearanceSettings(), AppearanceStore(context).state.value)
+            AppearanceStore(context).update { it.copy(glassBlur = 1) }
+            assertTrue(context.getSharedPreferences("appearance_v2", Context.MODE_PRIVATE).edit().commit())
+            val file = java.io.File(target.applicationInfo.dataDir, "shared_prefs/$name.xml").readText()
+            for (removed in listOf("glassEffects", "glassOpacity", "glassBorders", "reducedTransparency"))
+                assertFalse("$removed should be dropped", file.contains(removed))
+            assertEquals(1, AppearanceStore(context).state.value.glassBlur)
         } finally { target.deleteSharedPreferences(name) }
     }
 }

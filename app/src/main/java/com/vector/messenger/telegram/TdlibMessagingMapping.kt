@@ -75,6 +75,7 @@ internal fun mapTelegramMessage(json: JSONObject): Message {
         canSave = json.optBoolean("can_be_saved") && !blocked, restricted = blocked,
         senderId = json.optJSONObject("sender_id")?.let { if (it.optString("@type") == "messageSenderUser") it.optLong("user_id") else it.optLong("chat_id") } ?: 0,
         senderName = json.safeText("author_signature").takeIf { it.isNotBlank() },
+        media = if (blocked) null else mapTelegramMedia(content),
     )
 }
 private fun restrictedMessage(message: JSONObject) = restricted(message) || message.optJSONObject("self_destruct_type") != null || message.optJSONObject("ephemeral_content") != null
@@ -125,7 +126,7 @@ internal fun mapChatUpdate(json: JSONObject, photo: (JSONObject) -> ProfilePhoto
         "updateChatHasProtectedContent" -> ChatUpdate.Protection(id, json.optBoolean("has_protected_content"))
         "updateNewMessage" -> ChatUpdate.Upsert(mapTelegramMessage(json.getJSONObject("message")))
         "updateMessageSendSucceeded", "updateMessageSendFailed" -> ChatUpdate.Upsert(mapTelegramMessage(json.getJSONObject("message")), json.optLong("old_message_id"))
-        "updateMessageContent" -> ChatUpdate.Content(id, json.optLong("message_id"), contentText(json.getJSONObject("new_content")))
+        "updateMessageContent" -> json.getJSONObject("new_content").let { ChatUpdate.Content(id, json.optLong("message_id"), contentText(it), mapTelegramMedia(it)) }
         "updateDeleteMessages" -> if (json.optBoolean("is_permanent")) ChatUpdate.Deleted(id,
             json.optJSONArray("message_ids")?.let { ids -> (0 until ids.length()).map { ids.optLong(it) } }.orEmpty()) else null
         "updateFile" -> photo(json.getJSONObject("file"))?.let { ChatUpdate.File(it) }

@@ -13,6 +13,13 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 object RepositoryModule {
+    @Provides @Singleton fun player(@dagger.hilt.android.qualifiers.ApplicationContext context: android.content.Context,
+        scope: kotlinx.coroutines.CoroutineScope) = com.vector.messenger.feature.audio.SharedMediaPlayer(context, scope)
+    @Provides @Singleton fun media(authentication: com.vector.core.auth.AuthenticationRepository,
+        client: com.vector.messenger.telegram.TdlibClientManager,
+        @dagger.hilt.android.qualifiers.ApplicationContext context: android.content.Context,
+        scope: kotlinx.coroutines.CoroutineScope) = com.vector.core.media.MediaRepository(authentication,
+        com.vector.messenger.telegram.TdlibFileClient(client, context), scope)
     @Provides fun appearance(store: com.vector.messenger.feature.AppearanceStore): com.vector.messenger.feature.AppearancePreferences = store
     @Provides @Singleton fun chats(authentication: com.vector.core.auth.AuthenticationRepository,
         client: com.vector.messenger.telegram.TdlibClientManager, scope: kotlinx.coroutines.CoroutineScope): ChatRepository =

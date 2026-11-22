@@ -1,5 +1,7 @@
 # Real Telegram chats and text messaging
 
+This document records the text-messaging stage. The subsequent [media/download implementation](TELEGRAM_MEDIA.md) adds attachment metadata, viewing and file transfers. [Voice/audio integration](VOICE_AUDIO.md) subsequently adds native voice-message sending and shared playback. Those reports supersede the corresponding omissions below.
+
 ## Data source and architecture
 
 `SessionChatRepository` implements the existing `ChatRepository`. When authorization is Ready, it exposes only Telegram data; when signed out, it exposes the separate in-memory `DemoChatRepository` under the existing explicit demo labels. A session generation resets histories, drafts, selected chat state and in-flight request eligibility. Late send/history results cannot populate another session.

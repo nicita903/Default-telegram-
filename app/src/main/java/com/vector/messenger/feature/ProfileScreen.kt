@@ -88,6 +88,7 @@ private fun ProfileAvatar(profile: TelegramProfile) {
             }
         }
         if (bitmap == null) ChatAvatar(profile.displayName, 64.dp)
-        else Image(bitmap!!, "Telegram profile picture", Modifier.size(64.dp).clip(CircleShape), contentScale = ContentScale.Crop)
+        else Image(bitmap!!, "Telegram profile picture", Modifier.size(64.dp).clip(DefaultDesign.avatarShape)
+, contentScale = ContentScale.Crop)
     }
 }

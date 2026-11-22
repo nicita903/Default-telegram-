@@ -39,6 +39,8 @@ class TdlibMessagingClient(private val manager: TdlibClientManager) : TelegramMe
             request("inputMessageReplyToMessage", "message_id" to it, "quote" to null, "checklist_task_id" to 0, "poll_option_id" to "") },
             "options" to null, "reply_markup" to null, "input_message_content" to request("inputMessageText",
                 "text" to request("formattedText", "text" to text, "entities" to JSONArray()), "link_preview_options" to null, "clear_draft" to false))))
+    override suspend fun sendVoice(chatId: Long, clip: com.vector.core.audio.VoiceClip, replyTo: Long?) = mapTelegramMessage(call(
+        voiceMessageRequest(chatId, clip, replyTo)))
     override suspend fun resend(chatId: Long, messageId: Long) = call(request("resendMessages", "chat_id" to chatId,
         "message_ids" to JSONArray().put(messageId), "quote" to null, "paid_message_star_count" to 0)).optJSONArray("messages")?.objects()?.map(::mapTelegramMessage).orEmpty()
     override suspend fun openChat(chatId: Long) { call(request("openChat", "chat_id" to chatId)) }

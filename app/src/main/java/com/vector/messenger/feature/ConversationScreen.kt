@@ -18,7 +18,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.Icon
+import com.vector.messenger.design.DesignIcon as Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
@@ -37,6 +37,8 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LifecycleStartEffect
 import com.vector.core.*
 import com.vector.messenger.design.*
+import com.vector.messenger.feature.media.*
+import com.vector.core.media.*
 import com.vector.messenger.navigation.gesture.excludeModuleGestures
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -65,6 +67,17 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
     val listState = rememberLazyListState()
     var previousLastId by rememberSaveable(chatId, status.session) { mutableStateOf<Long?>(null) }
     val context = LocalContext.current
+    val mediaViewModel = LocalMediaViewModel.current
+    val voiceViewModel = com.vector.messenger.feature.audio.LocalVoiceViewModel.current
+    LaunchedEffect(voiceViewModel, chatId, status.session) {
+        voiceViewModel?.accepted?.collect { accepted -> if (accepted.chatId == chatId && replyTo == accepted.replyTo) replyTo = null }
+    }
+    var mediaSelection by rememberSaveable(chatId, status.session) { mutableStateOf<Long?>(null) }
+    val mediaItems = remember(messages, chat?.protectedContent) {
+        messages.mapNotNull { message -> message.media?.takeIf { !message.restricted }?.let {
+            MediaItem(chatId, message.id, it, message.canSave && chat?.protectedContent != true)
+        } }
+    }
     val scope = rememberCoroutineScope()
     val colors = DefaultDesign.colors
     LaunchedEffect(status.session, chat?.protectedContent) { selectText = null; actionsFor = null }
@@ -104,12 +117,14 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
             previousLastId = last.id
         }
     }
-    Column(Modifier.fillMaxSize().background(colors.canvas).imePadding()) {
+    Column(Modifier.fillMaxSize().designCanvas(colors.canvas).imePadding()) {
         LazyColumn(state = listState, reverseLayout = true, modifier = Modifier.weight(1f).testTag("message_list"), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 20.dp)) {
             itemsIndexed(newestFirst, key = { _, it -> it.id }, contentType = { _, _ -> "message" }) { index, message ->
                 val outgoing = message.outgoing
                 val previous = newestFirst.getOrNull(index + 1)
                 val grouped = previous != null && previous.outgoing == outgoing && previous.senderId == message.senderId
+                Column {
+                MessageDateSeparator(message.date, previous?.date)
                 Row(Modifier.fillMaxWidth().padding(top = if (grouped) 4.dp else 16.dp).excludeModuleGestures(), horizontalArrangement = if (outgoing) Arrangement.End else Arrangement.Start, verticalAlignment = Alignment.Bottom) {
                     if (!outgoing && chat?.kind == ChatKind.Group) { ChatAvatar(message.senderName ?: chat.title, 28.dp); Spacer(Modifier.width(8.dp)) }
                     Column {
@@ -117,12 +132,15 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
                     MessageBubble(message, byId[message.replyTo], grouped,
                         onActions = { actionsFor = message.id }, onReply = { replyTo = message.id },
                         onReaction = { viewModel.react(chatId, message.id, it) },
+                        mediaViewModel = mediaViewModel, mediaItem = mediaItems.find { it.messageId == message.id },
+                        onMedia = { mediaSelection = message.id },
                         onOpenAttachment = { attachment ->
                             try { context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(attachment.uri.toUri(), attachment.mimeType).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
                             catch (_: ActivityNotFoundException) { fileError = "No application can open this file." }
                             catch (_: SecurityException) { fileError = "This file is no longer accessible. Choose it again." }
                         })
                     }
+                }
                 }
             }
             if (status.live) item(key = "history_controls") {
@@ -133,16 +151,21 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
                 }
             }
         }
-        Column(Modifier.excludeModuleGestures().background(colors.panel)) {
-            DefaultRule()
+        Column(Modifier.excludeModuleGestures()
+            .padding(horizontal = 8.dp, vertical = 8.dp)
+            .glassSurface(DefaultDesign.composerShape)) {
+            com.vector.messenger.feature.audio.VoiceRecordingPanel(chatId)
             byId[replyTo]?.let { reply -> ComposerPreview("Reply to ${if (reply.outgoing) "you" else chat?.title.orEmpty()}", reply.text.ifEmpty { reply.attachment?.name.orEmpty() }) { replyTo = null } }
             attachmentName?.let { name -> ComposerPreview("Local attachment", name) { attachmentUri = null; attachmentName = null; attachmentMime = null } }
             (fileError ?: error)?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)) }
-            Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.fillMaxWidth().padding(6.dp), verticalAlignment = Alignment.Bottom, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (!status.live) DefaultIconControl(VectorIcons.Attach, "Attach file", {
                     try { picker.launch(arrayOf("*/*")) } catch (_: ActivityNotFoundException) { fileError = "No document picker is available." }
-                })
-                DefaultInput(draft, { draft = it }, if (status.live) "Message" else "Demo message", Modifier.weight(1f).testTag("message_composer"), singleLine = false, maxLines = 5, framed = false)
+                }, quiet = true)
+                DefaultInput(draft, { draft = it }, if (status.live) "Message" else "Demo message", Modifier.weight(1f).testTag("message_composer"), singleLine = false, maxLines = 5, framed = false,
+                    surface = androidx.compose.ui.graphics.Color.Transparent)
+                if (status.live && draft.isBlank() && attachmentUri == null)
+                    com.vector.messenger.feature.audio.VoiceMicrophone(chatId, replyTo, chat?.canSend == true)
                 DefaultIconControl(Icons.AutoMirrored.Filled.Send, if (status.live) "Send message" else "Send demo message", {
                     val submittedDraft = draft
                     val submittedReply = replyTo
@@ -158,6 +181,7 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
             }
         }
     }
+    mediaSelection?.let { id -> if (mediaViewModel != null) MediaViewer(mediaItems, id, mediaViewModel) { mediaSelection = null } }
     byId[actionsFor]?.let { selected ->
         DefaultDialog("Message", { actionsFor = null }) {
             if (!status.live) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -195,6 +219,7 @@ private fun ComposerPreview(title: String, text: String, onClose: () -> Unit) {
 @Composable
 private fun MessageBubble(message: Message, reply: Message?, grouped: Boolean,
     onActions: () -> Unit, onReply: () -> Unit, onReaction: (String) -> Unit, onOpenAttachment: (Attachment) -> Unit,
+    mediaViewModel: MediaViewModel?, mediaItem: MediaItem?, onMedia: () -> Unit,
 ) {
     val outgoing = message.outgoing
     val colors = DefaultDesign.colors
@@ -202,14 +227,15 @@ private fun MessageBubble(message: Message, reply: Message?, grouped: Boolean,
     val translation = animateFloatAsState(drag, VectorMotionSpec.replyFollow(LocalAppearance.current), label = "Swipe to reply")
     val replyDistance = with(LocalDensity.current) { 48.dp.toPx() }
     val currentReply by rememberUpdatedState(onReply)
-    val shape = RoundedCornerShape(topStart = 18.dp, topEnd = 18.dp, bottomEnd = if (outgoing && !grouped) 5.dp else 18.dp, bottomStart = if (!outgoing && !grouped) 5.dp else 18.dp)
+    val shape = DefaultDesign.messageShape(outgoing, grouped)
     Column(Modifier.widthIn(max = 310.dp).graphicsLayer { translationX = translation.value }
         .pointerInput(message.id, replyDistance) {
             detectHorizontalDragGestures(onDragEnd = { if (drag >= replyDistance) currentReply(); drag = 0f }, onDragCancel = { drag = 0f }) { change, amount ->
                 change.consume(); drag = max(0f, drag + amount).coerceAtMost(replyDistance * 1.2f)
             }
         }
-        .background(if (outgoing) colors.outgoing else colors.panel, shape)
+        .background(if (outgoing) colors.outgoing else colors.panel.copy(alpha = .78f), shape)
+        .then(Modifier.designFrame(shape, tint = if (outgoing) colors.accent.copy(alpha = .30f) else colors.text.copy(alpha = .07f)))
         .combinedClickable(indication = null, interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, onClick = {}, onLongClick = onActions)
         .padding(horizontal = 14.dp, vertical = 12.dp)) {
         if (message.replyTo != null) {
@@ -221,8 +247,14 @@ private fun MessageBubble(message: Message, reply: Message?, grouped: Boolean,
                 }
             }
         }
+        if (mediaItem != null && mediaViewModel != null) {
+            if (mediaItem.media.kind in listOf(MediaKind.Voice, MediaKind.Audio)) com.vector.messenger.feature.audio.VoiceAttachment(mediaItem, mediaViewModel)
+            else MediaAttachmentView(mediaItem, mediaViewModel, onMedia)
+        }
         message.attachment?.let { attachment -> DefaultAction(attachment.name, { onOpenAttachment(attachment) }, Modifier.padding(bottom = 8.dp), VectorIcons.Attach) }
-        if (message.text.isNotEmpty()) Text(message.text, color = colors.text, style = MaterialTheme.typography.bodyLarge)
+        if (message.text.isNotEmpty()) Row {
+            Text(message.text, color = colors.text, style = MaterialTheme.typography.bodyLarge)
+        }
         Row(Modifier.align(Alignment.End).padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Text(message.time, style = MaterialTheme.typography.labelSmall, color = colors.secondary)
             if (outgoing) {
@@ -235,7 +267,7 @@ private fun MessageBubble(message: Message, reply: Message?, grouped: Boolean,
                     Delivery.Read -> "✓✓"
                     Delivery.Sent -> "✓"
                     else -> ""
-                }, style = MaterialTheme.typography.labelSmall, color = colors.secondary,
+                }, style = MaterialTheme.typography.labelSmall, color = if (message.delivery == Delivery.Read) colors.active else colors.secondary,
                     modifier = Modifier.semantics { contentDescription = when (message.delivery) {
                         Delivery.Sent -> "Sent to Telegram"
                         Delivery.Read -> "Read"

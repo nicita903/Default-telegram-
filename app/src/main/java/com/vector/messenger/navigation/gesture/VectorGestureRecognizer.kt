@@ -39,8 +39,12 @@ class VectorGestureRecognizer(private val thresholds: GestureThresholds) {
         if (state == VectorGestureState.Idle || state == VectorGestureState.Cancelled) return
         if (pointerCount != 1) { cancel(GestureCancelReason.MultiplePointers); return }
         if (consumed) { cancel(GestureCancelReason.ChildConsumed); return }
-        if (abs(dy) > thresholds.verticalTolerance ||
-            (direction == null && abs(dy) > thresholds.touchSlop && abs(dy) >= abs(dx))) {
+        // Once horizontal intent is locked, judge drift against the direction as well as
+        // the tolerance. An absolute 20 dp cap rejected clear horizontal diagonal swipes.
+        val verticalIntent = if (direction == null)
+            abs(dy) > thresholds.touchSlop && abs(dy) >= abs(dx)
+        else abs(dy) > thresholds.verticalTolerance && abs(dy) * thresholds.directionRatio >= abs(dx)
+        if (verticalIntent) {
             cancel(GestureCancelReason.VerticalIntent); return
         }
         if (direction == null && abs(dx) >= thresholds.touchSlop && abs(dx) > abs(dy) * thresholds.directionRatio) {

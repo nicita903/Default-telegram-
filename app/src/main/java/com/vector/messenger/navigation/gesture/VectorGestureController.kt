@@ -28,12 +28,17 @@ data class VectorGestureConfig(
     val holdMillis: Long = 180,
     val verticalTolerance: Dp = 20.dp,
     val reverseTolerance: Dp = 14.dp,
-    val edgeExclusion: Dp = 24.dp,
+    // Android's actual system-gesture insets are always respected. Do not reserve a second
+    // hard-coded strip on three-button devices where those insets are zero.
+    val edgeExclusion: Dp = 0.dp,
 ) { init { require(distance.value > 0 && holdMillis > 0) } }
 
 @Stable
 class VectorGestureController {
     var state by mutableStateOf(VectorGestureState.Idle)
+        internal set
+    /** Published direction for hold feedback only; it never affects recognition or navigation. */
+    var direction by mutableStateOf<VectorGestureDirection?>(null)
         internal set
     val activated get() = state == VectorGestureState.Activated
 }
@@ -95,6 +100,7 @@ fun Modifier.vectorModuleGestures(
     scopeKey: Any? = null,
     haptics: Boolean = true,
     enabled: Boolean = true,
+    contentEnabled: Boolean = true,
 ): Modifier = composed {
     val density = LocalDensity.current
     val viewConfiguration = LocalViewConfiguration.current
@@ -110,7 +116,7 @@ fun Modifier.vectorModuleGestures(
     val systemRight = WindowInsets.systemGestures.getRight(density, LocalLayoutDirection.current).toFloat()
     val coordinates = remember { GestureHostCoordinates() }
     onGloballyPositioned { coordinates.value = it }
-        .pointerInput(controller, thresholds, config.holdMillis, edge, systemLeft, systemRight, scopeKey, enabled, haptics) {
+        .pointerInput(controller, thresholds, config.holdMillis, edge, systemLeft, systemRight, scopeKey, enabled, contentEnabled, haptics) {
             if (!enabled) {
                 GestureDiagnostics.record(VectorGestureState.Idle, null, config.distance.value, config.holdMillis, policy())
                 return@pointerInput
@@ -126,6 +132,7 @@ fun Modifier.vectorModuleGestures(
                     down.position.x < maxOf(edge, systemLeft) || down.position.x > size.width - maxOf(edge, systemRight) -> GestureCancelReason.SystemEdge
                     regions.contains(startInRoot) -> GestureCancelReason.ExcludedRegion
                     surface == null -> GestureCancelReason.OutsideSurface
+                    surface == ModuleGestureSurface.Content && !contentEnabled -> GestureCancelReason.ExcludedRegion
                     !moduleAllowed -> policy()
                     else -> GestureCancelReason.None
                 }
@@ -133,14 +140,13 @@ fun Modifier.vectorModuleGestures(
                     GestureDiagnostics.record(VectorGestureState.Cancelled, null, config.distance.value, config.holdMillis, rejected)
                     return@awaitEachGesture
                 }
-                if (!moduleAllowed) GestureDiagnostics.record(VectorGestureState.Idle, null, config.distance.value, config.holdMillis, policy())
                 // Root local coordinates are physical and unscaled throughout the sequence.
                 val start = down.position
                 machine.down()
                 var publishedState: VectorGestureState? = null
                 var publishedDirection: VectorGestureDirection? = null
                 fun publish(action: GestureNavigationAction = GestureNavigationAction.None) {
-                    if (moduleAllowed) controller.state = machine.state
+                    if (moduleAllowed) { controller.state = machine.state; controller.direction = machine.direction }
                     if (publishedState != machine.state || publishedDirection != machine.direction || action != GestureNavigationAction.None) {
                         GestureDiagnostics.record(machine.state, machine.direction, config.distance.value, config.holdMillis, machine.cancellation, action)
                         publishedState = machine.state; publishedDirection = machine.direction
@@ -197,8 +203,8 @@ fun Modifier.vectorModuleGestures(
                         }
                         val owned = machine.state == VectorGestureState.Holding || machine.state == VectorGestureState.Activated
                         if (owned) change.consume()
-                        // A child or another ancestor can claim during Main after pre-slop tracking.
-                        // Inspect Final before accepting a later threshold or starting a hold.
+                        // Children that claimed the sequence before module intent keep priority.
+                        // Main observes their consumption; Final covers any later ancestor claim.
                         val final = awaitPointerEvent(PointerEventPass.Final)
                         if (!owned && final.changes.any { it.id == down.id && it.isConsumed }) {
                             machine.cancel(GestureCancelReason.ChildConsumed); publish(); break
@@ -211,6 +217,7 @@ fun Modifier.vectorModuleGestures(
                     }
                     machine.reset()
                     controller.state = VectorGestureState.Idle
+                    controller.direction = null
                     publish()
                 }
             }

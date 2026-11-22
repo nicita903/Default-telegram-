@@ -30,6 +30,9 @@ class SelectiveGhostTest {
         val ruleSets = mutableMapOf(1L to initial, 2L to initial)
         var gate: CompletableDeferred<Unit>? = null
         var failBefore = false; var failAfter = false
+        var failRules = false
+        var rulesGate: CompletableDeferred<Unit>? = null
+        var normalize: (List<PrivacyRule>) -> List<PrivacyRule> = { it }
         var setCalls = 0; var actions = 0
         var contactsGate: CompletableDeferred<Unit>? = null
         var actionPolicy: (Long, String) -> Boolean = { _, _ -> false }
@@ -38,10 +41,15 @@ class SelectiveGhostTest {
             contactsGate?.await()
             return listOf(GhostContact(10, "Fixture A"), GhostContact(11, "Fixture B"))
         }
-        override suspend fun rules() = ruleSets.getValue(account)
+        override suspend fun rules(): List<PrivacyRule> {
+            val snapshot = ruleSets.getValue(account)
+            rulesGate?.await(); check(!failRules)
+            return snapshot
+        }
         override suspend fun setRules(rules: List<PrivacyRule>) {
             setCalls++; gate?.await(); check(!failBefore)
-            ruleSets[account] = rules; events.emit(GhostEvent.Rules(rules)); check(!failAfter)
+            val applied = normalize(rules)
+            ruleSets[account] = applied; events.emit(GhostEvent.Rules(applied)); check(!failAfter)
         }
         override suspend fun chatAction(chatId: Long, action: String): Boolean {
             if (!actionPolicy(chatId, action)) return false
@@ -66,12 +74,13 @@ class SelectiveGhostTest {
     @Test fun typingAndAllApplicableRecordingIndicatorsAreSuppressedOnlyForSelectedDirectUsers() = runTest {
         val auth = Auth(); val client = Client(allow); val repo = SelectiveGhostRepository(auth, client, Store(), DemoGhostRepository(), backgroundScope)
         auth.ready(true); runCurrent(); repo.select(10); runCurrent(); repo.enabled(true); runCurrent()
-        for (action in listOf("chatActionTyping", "chatActionRecordingVoiceNote", "chatActionRecordingVideo", "chatActionRecordingVideoNote", "chatActionUploadingVoiceNote", "chatActionUploadingVideoNote")) {
+        for (action in listOf("chatActionTyping", "chatActionRecordingVoiceNote", "chatActionRecordingVideo", "chatActionRecordingVideoNote", "chatActionUploadingVoiceNote", "chatActionUploadingVideoNote", "chatActionUploadingVideo")) {
             assertFalse(client.actionPolicy(10, action)); assertTrue(client.actionPolicy(11, action)); assertTrue(client.actionPolicy(0, action))
             repo.sendAction(10, action); runCurrent()
         }
         assertEquals(0, client.actions); assertTrue(client.actionPolicy(10, "chatActionCancel"))
         assertFalse(client.actionPolicy(-1, "chatActionTyping"))
+        assertTrue(client.actionPolicy(10, "chatActionUploadingDocument")) // Not a media-transfer interception.
         repo.policy(10, ContactPrivacy(typing = false)); runCurrent(); assertTrue(client.actionPolicy(10, "chatActionTyping"))
         assertFalse(client.actionPolicy(10, "chatActionRecordingVoiceNote"))
         repo.enabled(false); runCurrent(); assertTrue(client.actionPolicy(10, "chatActionRecordingVoiceNote"))
@@ -87,7 +96,9 @@ class SelectiveGhostTest {
         assertEquals(listOf(PrivacyRule.DenyUsers(setOf(10L))) + original, client.rules())
         assertTrue(repo.state.value.confirmed)
         repo.applyPrivacy(); runCurrent(); assertEquals(1, client.setCalls)
-        repo.enabled(false); runCurrent(); assertFalse(repo.state.value.confirmed)
+        repo.enabled(false); runCurrent(); assertTrue(repo.state.value.confirmed) // Local filters do not rewrite server intent.
+        repo.applyPrivacy(); runCurrent(); assertEquals(1, client.setCalls)
+        repo.policy(10, ContactPrivacy(status = false)); runCurrent(); assertFalse(repo.state.value.confirmed)
         repo.applyPrivacy(); runCurrent(); assertEquals(original, client.rules()); assertEquals(2, client.setCalls)
     }
     @Test fun externalPrivacyEditsCauseConflictWithoutOverwritingAnyRules() = runTest {
@@ -134,7 +145,7 @@ class SelectiveGhostTest {
         val denied = listOf(PrivacyRule.DenyUsers(setOf(10L, 99L))) + allow
         assertEquals(denied, statusExceptions(denied, setOf(10L)))
         assertEquals(allow, statusExceptions(allow, emptySet()))
-        assertThrows(IllegalArgumentException::class.java) { statusExceptions(listOf(PrivacyRule.DenyUsers((1L..1000L).toSet())), setOf(1001)) }
+        assertThrows(IllegalArgumentException::class.java) { statusExceptions(listOf(PrivacyRule.DenyUsers((1L..1000L).toSet())) + allow, setOf(1001)) }
         assertFalse(excludesUsers(allow + denied, setOf(10))) // First match controls visibility.
     }
     @Test fun incrementalContactChangesWinOverAnInflightContactSnapshot() = runTest {
@@ -146,5 +157,77 @@ class SelectiveGhostTest {
         client.contactsGate!!.complete(Unit); runCurrent()
         assertEquals(setOf(11L, 12L), repo.state.value.contacts.map { it.id }.toSet())
         assertTrue(repo.state.value.initialized); assertFalse(repo.state.value.busy)
+    }
+    @Test fun multipleServerExclusionsApplyWithLocalFiltersOffAndAcceptSafeNormalization() = runTest {
+        val original = listOf(PrivacyRule.AllowUsers(setOf(99L)), PrivacyRule.DenyUsers(setOf(20L))) + allow
+        val auth = Auth(); val client = Client(original); val repo = SelectiveGhostRepository(auth, client, Store(), DemoGhostRepository(), backgroundScope)
+        auth.ready(true); runCurrent()
+        for (id in listOf(10L, 11L)) { repo.select(id); runCurrent(); repo.policy(id, ContactPrivacy(status = true)); runCurrent() }
+        client.normalize = { listOf(PrivacyRule.AllowUsers(setOf(99L)), PrivacyRule.DenyUsers(setOf(10L, 11L, 20L))) + allow }
+        repo.applyPrivacy(); runCurrent()
+        assertFalse(repo.state.value.saved.enabled)
+        assertTrue(repo.state.value.confirmed)
+        assertEquals(CapabilityStatus.Enabled, repo.state.value.serverFilter(10))
+        assertEquals(CapabilityStatus.Enabled, repo.state.value.serverFilter(11))
+        assertEquals(CapabilityStatus.Disabled, repo.state.value.localFilter(10))
+        assertEquals(VisibilityDecision.Allowed, visibilityDecision(client.rules(), 99))
+        assertEquals(VisibilityDecision.Restricted, visibilityDecision(client.rules(), 20))
+        client.normalize = { it }; repo.remove(10); runCurrent(); repo.remove(11); runCurrent(); repo.applyPrivacy(); runCurrent()
+        assertEquals(original, client.rules())
+    }
+    @Test fun effectiveRulesSkipUnrelatedAllowsAndUseKnownContactMembership() {
+        val rules = listOf(PrivacyRule.AllowUsers(setOf(99L)), PrivacyRule.DenyUsers(setOf(10L, 11L))) + allow
+        assertTrue(excludesUsers(rules, setOf(10L, 11L)))
+        assertFalse(excludesUsers(rules, setOf(99L)))
+        val contactsOnly = listOf(PrivacyRule.Other("{\"@type\":\"userPrivacySettingRuleRestrictContacts\"}")) + allow
+        assertEquals(VisibilityDecision.Restricted, visibilityDecision(contactsOnly, 10, contact = true))
+        assertEquals(VisibilityDecision.Allowed, visibilityDecision(contactsOnly, 10, contact = false))
+        assertEquals(VisibilityDecision.Unknown, visibilityDecision(contactsOnly, 10))
+        val premium = listOf(PrivacyRule.DenyUsers(setOf(10L)), PrivacyRule.Other("{\"@type\":\"userPrivacySettingRuleAllowPremiumUsers\"}")) + allow
+        assertEquals(VisibilityDecision.Restricted, visibilityDecision(premium, 10, premium = true))
+    }
+    @Test fun mergeMovesOnlySelectedExceptionsAndDoesNotExceedTheLimitThroughDuplicates() {
+        val baseline = listOf(PrivacyRule.AllowUsers((1L..1000L).toSet())) + allow
+        val merged = statusExceptions(baseline, setOf(10L, 11L))
+        assertEquals(PrivacyRule.DenyUsers(setOf(10L, 11L)), merged.first())
+        assertEquals((1L..1000L).toSet() - setOf(10L, 11L), (merged[1] as PrivacyRule.AllowUsers).ids)
+        assertEquals(PrivacyRule.AllowUsers((1L..1000L).toSet()), baseline.first())
+    }
+    @Test fun readbackMustPreserveUnrelatedExplicitExceptionsBeforeReportingEnabled() = runTest {
+        val original = listOf(PrivacyRule.AllowUsers(setOf(99L))) + allow
+        val auth = Auth(); val client = Client(original); val repo = SelectiveGhostRepository(auth, client, Store(), DemoGhostRepository(), backgroundScope)
+        auth.ready(true); runCurrent(); repo.select(10); runCurrent(); repo.policy(10, ContactPrivacy(status = true)); runCurrent()
+        client.normalize = { listOf(PrivacyRule.DenyUsers(setOf(10L))) + allow }
+        repo.applyPrivacy(); runCurrent()
+        assertFalse(repo.state.value.confirmed); assertTrue(repo.state.value.conflict)
+        assertEquals(CapabilityStatus.Failed, repo.state.value.serverFilter(10))
+    }
+    @Test fun failedServerRefreshRemainsFailedAfterLocalPreferenceChanges() = runTest {
+        val auth = Auth(); val client = Client(allow); val repo = SelectiveGhostRepository(auth, client, Store(), DemoGhostRepository(), backgroundScope)
+        auth.ready(true); runCurrent(); repo.select(10); runCurrent(); repo.policy(10, ContactPrivacy(status = true)); runCurrent(); repo.applyPrivacy(); runCurrent()
+        client.failRules = true; repo.refresh(); runCurrent()
+        assertEquals(CapabilityStatus.Failed, repo.state.value.serverFilter(10))
+        repo.policy(10, ContactPrivacy(typing = false, status = true)); runCurrent()
+        assertFalse(repo.state.value.confirmed); assertEquals(CapabilityStatus.Failed, repo.state.value.serverFilter(10))
+        client.failRules = false; repo.refresh(); runCurrent()
+        assertEquals(CapabilityStatus.Enabled, repo.state.value.serverFilter(10))
+    }
+    @Test fun aNewerPrivacyUpdateWinsOverAnInflightStaleRefresh() = runTest {
+        val auth = Auth(); val client = Client(allow); val repo = SelectiveGhostRepository(auth, client, Store(), DemoGhostRepository(), backgroundScope)
+        auth.ready(true); runCurrent(); repo.select(10); runCurrent()
+        client.rulesGate = CompletableDeferred(); repo.refresh(); runCurrent()
+        val changed = listOf(PrivacyRule.DenyUsers(setOf(10L))) + allow
+        client.ruleSets[1] = changed; client.events.emit(GhostEvent.Rules(changed)); runCurrent()
+        client.rulesGate!!.complete(Unit); runCurrent()
+        assertEquals(CapabilityStatus.Enabled, repo.state.value.serverFilter(10)) // Existing, freshly observed exclusion.
+    }
+    @Test fun contactMembershipChangesReevaluateEffectiveServerStateWithoutChangingRules() = runTest {
+        val rules = listOf(PrivacyRule.Other("{\"@type\":\"userPrivacySettingRuleRestrictContacts\"}")) + allow
+        val auth = Auth(); val client = Client(rules); val repo = SelectiveGhostRepository(auth, client, Store(), DemoGhostRepository(), backgroundScope)
+        auth.ready(true); runCurrent(); repo.select(10); runCurrent()
+        assertEquals(CapabilityStatus.Enabled, repo.state.value.serverFilter(10))
+        client.events.emit(GhostEvent.Contact(GhostContact(10, "Former contact"), false)); runCurrent()
+        assertEquals(CapabilityStatus.Disabled, repo.state.value.serverFilter(10))
+        assertEquals(0, client.setCalls); assertEquals(rules, client.rules())
     }
 }

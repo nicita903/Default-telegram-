@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="DefaultFloatingWindowAnimation">
+        <item name="android:windowEnterAnimation">@anim/floating_enter</item>
+        <item name="android:windowExitAnimation">@anim/floating_exit</item>
+    </style>
+</resources>

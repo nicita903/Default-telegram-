@@ -162,7 +162,7 @@ class MotionProfileUiTest {
                 @Suppress("UNCHECKED_CAST") override fun <T : ViewModel> create(modelClass: Class<T>): T = ChatsViewModel(repository) as T
             })
             chats = provider.get("profileChats", ChatsViewModel::class.java)
-            compose.activity.setContent { DefaultTheme(ThemeMode.Dark) { ChatsScreen(chats, {}) } }
+            compose.activity.setContent { DefaultTheme { ChatsScreen(chats, {}) } }
         }
         compose.waitUntil(3000) { chats.filteredChats.value.size == 80 }
         val measurements = JSONArray()

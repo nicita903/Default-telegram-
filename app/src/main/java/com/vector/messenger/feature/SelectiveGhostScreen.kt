@@ -37,20 +37,21 @@ internal fun SelectiveGhostScreen(state: GhostState, enabled: (Boolean) -> Unit,
     LazyColumn(Modifier.fillMaxSize().testTag("privacy_scroll"), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
             Text("Ghost Mode", style = MaterialTheme.typography.headlineSmall)
-            PreferenceToggle("Enable Ghost Mode", state.saved.enabled, editable, enabled)
-            Text(if (state.busy) "Updating…" else if (state.saved.enabled && state.initialized) "Local controls active · Default only" else "Local controls off",
+            PreferenceToggle("Enable local suppression", state.saved.enabled, editable, enabled)
+            Text(if (!state.initialized && state.error != null) "Local filters · Failed" else if (!state.initialized || state.operation == GhostOperation.Saving) "Local filters · Applying" else if (state.saved.enabled) "Local filters · Enabled" else "Local filters · Disabled",
                 style = MaterialTheme.typography.labelSmall, color = DefaultDesign.colors.accent)
         }
         item {
             Text("Last Seen & Online", style = MaterialTheme.typography.titleMedium)
             Text(when {
-                state.conflict -> "Server rules changed · review required"
-                !state.serverLoaded -> "Server rules not confirmed"
+                state.operation == GhostOperation.Applying -> "Server exclusions · Applying"
+                state.serverError != null || state.conflict -> "Server exclusions · Failed · refresh or review required"
+                !state.serverLoaded -> "Server verification · Unsupported until rules are loaded"
                 state.confirmed && state.saved.desiredStatus().isEmpty() -> "Current rules checked · existing exclusions may apply"
                 state.confirmed -> "Selected exceptions confirmed by Telegram"
-                else -> "Server changes pending"
+                else -> "Server changes · Disabled · press Apply to commit"
             }, style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.secondary)
-            Text("Apply commits account-wide exceptions. Disabling or removing a contact changes local controls first; apply again to restore managed server rules.",
+            Text("Local filters and Telegram privacy are independent. Apply commits requested exceptions. Clear a requested exclusion or remove a contact, then Apply to restore managed server rules.",
                 style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.secondary)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 DefaultAction("Refresh privacy", refresh, enabled = !state.busy)
@@ -61,6 +62,7 @@ internal fun SelectiveGhostScreen(state: GhostState, enabled: (Boolean) -> Unit,
                 DefaultAction("Keep current server rules", keepCurrent, enabled = editable)
             }
             state.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.accent) }
+            state.serverError?.takeIf { it != state.error }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.accent) }
         }
         item {
             DefaultRule()
@@ -82,8 +84,11 @@ internal fun SelectiveGhostScreen(state: GhostState, enabled: (Boolean) -> Unit,
                     DefaultIconControl(Icons.Default.Close, "Remove $name from Ghost Mode", { remove(id) }, enabled = editable, quiet = true)
                 }
                 PreferenceToggle("Suppress typing · $name", value.typing, editable) { policy(id, value.copy(typing = it)) }
+                Text("Typing filter · ${state.localFilter(id).name}", style = MaterialTheme.typography.labelSmall, color = DefaultDesign.colors.secondary)
                 PreferenceToggle("Suppress recording · $name", value.recording, editable) { policy(id, value.copy(recording = it)) }
-                PreferenceToggle("Hide exact Last Seen & Online · $name", value.status, editable) { policy(id, value.copy(status = it)) }
+                Text("Recording filter · ${state.localFilter(id, recording = true).name} · Voice recorder integrated; video unsupported", style = MaterialTheme.typography.labelSmall, color = DefaultDesign.colors.secondary)
+                PreferenceToggle("Request Last Seen & Online exclusion · $name", value.status, editable) { policy(id, value.copy(status = it)) }
+                Text("Telegram exclusion · ${state.serverFilter(id).name}", style = MaterialTheme.typography.labelSmall, color = DefaultDesign.colors.secondary)
             }
         }
         item {
@@ -103,8 +108,11 @@ internal fun SelectiveGhostScreen(state: GhostState, enabled: (Boolean) -> Unit,
         if (available.isEmpty()) item { Text("No matching unselected contacts", style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.secondary) }
         item {
             DefaultRule()
+            Text("Read reporting · Enabled (normal)", style = MaterialTheme.typography.bodySmall)
+            Text("Hide all read receipts · Unsupported", style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.secondary)
+            Text("Visible messages are reported as read normally. No optional read-deferral mode is implemented. Last Seen & Online exclusions do not disable read receipts.", style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.secondary)
             Text("No complete invisibility. Sending or reading messages can briefly expose online activity, including in shared groups. Premium does not bypass explicit exclusions or remove these exceptions.", style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.secondary)
-            Text("Local indicator suppression covers direct chats in Default, not other clients or shared-group activity. This build has no outgoing typing/recording broadcasts or recorder. Logging out does not restore server privacy rules.", style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.secondary)
+            Text("Local indicator suppression covers direct chats in Default, not other clients or shared-group activity. Voice recording actions pass through this filter; actual voice uploads remain enabled. Typing broadcasts and video recording are not implemented. Logging out does not restore server privacy rules.", style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.secondary)
         }
     }
 }

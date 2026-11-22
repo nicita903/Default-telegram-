@@ -54,15 +54,11 @@ class ChatsViewModelTest {
         val state = SavedStateHandle()
         val preferences = object : AppearancePreferences {
             override val state = MutableStateFlow(AppearanceSettings())
-            override val theme = MutableStateFlow("System")
-            override fun theme(value: String) { theme.value = value }
             override fun update(change: (AppearanceSettings) -> AppearanceSettings) { this.state.value = change(this.state.value) }
         }
         val first = PreferencesViewModel(DemoGhostRepository(), state, preferences)
-        first.theme(ThemeMode.Light)
         first.hidePreviews(false)
         val restored = PreferencesViewModel(DemoGhostRepository(), state, preferences)
-        assertEquals(ThemeMode.Light.name, restored.theme.value)
         assertFalse(restored.hidePreviews.value)
     }
     @Test fun conversationRoutesRequireValidIdentifiers() {

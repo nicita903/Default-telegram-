@@ -37,6 +37,9 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
     override val connection = connectionState.asStateFlow()
     private val ghostEvents = MutableSharedFlow<JSONObject>(extraBufferCapacity = 64)
     internal val ghostUpdates = ghostEvents.asSharedFlow()
+    private val mediaEvents = MutableSharedFlow<JSONObject>(extraBufferCapacity = 64)
+    internal val mediaUpdates = mediaEvents.asSharedFlow()
+    private val mediaTypes = setOf("updateFile", "updateFileAddedToDownloads", "updateFileDownload", "updateFileRemovedFromDownloads")
     private val actionTargets = ConcurrentHashMap<Long, Long>()
     @Volatile private var actionPolicy: (Long, String) -> Boolean = { _, action -> action == "chatActionCancel" }
     internal fun installChatActionPolicy(policy: (Long, String) -> Boolean) { actionPolicy = policy }
@@ -113,6 +116,7 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                             "updateConnectionState" -> connectionState.value = mapProfileConnection(json.optJSONObject("state") ?: JSONObject())
                         }
                         if (authorized && json.optString("@type") in messagingTypes) messagingEvents.send(MessagingEnvelope(sessionEpoch, json))
+                        if (authorized && json.optString("@type") in mediaTypes) mediaEvents.emit(json)
                         if (authorized && (json.optString("@type") == "updateUserPrivacySettingRules" || json.optString("@type") == "updateUser")) ghostEvents.emit(json)
                         if (json.optString("@type") != "updateAuthorizationState") continue
                         val auth = json.getJSONObject("authorization_state")

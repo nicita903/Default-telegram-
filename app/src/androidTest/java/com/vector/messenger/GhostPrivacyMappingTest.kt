@@ -17,6 +17,10 @@ class GhostPrivacyMappingTest {
         val proposed = statusExceptions(rules, setOf(11L))
         assertEquals(PrivacyRule.DenyUsers(setOf(11L)), proposed.first())
         assertEquals(rules, proposed.drop(1))
+        val explicitAllows = decodePrivacyRules(JSONArray("""[{"@type":"userPrivacySettingRuleAllowUsers","user_ids":[99,11]},{"@type":"userPrivacySettingRuleRestrictUsers","user_ids":[10]},{"@type":"userPrivacySettingRuleAllowAll"}]"""))
+        assertEquals(PrivacyRule.AllowUsers(setOf(11L, 99L)), explicitAllows.first())
+        assertTrue(excludesUsers(explicitAllows, setOf(10L)))
+        assertEquals(explicitAllows, decodePrivacyRules(encodePrivacyRules(explicitAllows)))
     }
     @Test fun canonicalObjectsCompareStructurallyAndExistingRestrictAllNeedsNoWrite() {
         assertEquals(canonicalJson(JSONObject("""{"b":2,"a":1}""")), canonicalJson(JSONObject("""{"a":1,"b":2}""")))

@@ -1,5 +1,7 @@
 # Selective Ghost Mode
 
+The later [Ghost Mode audit and repair](GHOST_MODE_AUDIT.md) supersedes the original implementation details and test totals below. Local suppression and server exclusions are now independent, with per-contact verified capability states.
+
 Ghost Mode now has an authenticated, real-contact interface in its existing destination. It supports contact search, selection/removal, a master enable switch, per-contact typing/recording policies, and combined exact Last Seen & Online exclusions. Signed-out demonstration controls remain explicitly labeled and separate. Authenticated contact selection uses official TDLib `getContacts`/`getUser` results, not demo conversations or guessed chat IDs.
 
 ## Privacy guarantees and limits
@@ -18,13 +20,13 @@ Ghost Mode now has an authenticated, real-contact interface in its existing dest
 
 ### Current activity-path audit
 
-The existing text-only build has no routine outgoing typing broadcasts, recorder or recording broadcasts. This phase does not add presence broadcasts to the composer. Its local policies enforce the shared transport boundary for any applicable activity request and provide a policy-controlled action gateway for supported/future features. Recording suppression was tested with fake actions, not a physical recorder feature.
+The subsequent [voice/audio integration](VOICE_AUDIO.md) now emits recording-voice-note actions only after actual capture starts, through this same policy-controlled gateway. It cancels the action on stop and never suppresses the actual voice-message upload operation. No routine typing or video-recorder broadcasts were added. These local controls affect Default's emitted activity, not other clients or Telegram's server-side visibility exceptions.
 
 There are two direct native send call sites: startup's fixed `getAuthorizationState` request and the manager's correlated `send` method. Every `sendChatAction` through the latter is checked immediately before JNI. `getChat`/`updateNewChat` resolve a private chat to its actual user ID; groups/channels are distinguished. Unresolved private targets and unreadable preference state fail closed for indicators. Other message/authentication requests bypass this narrow activity filter.
 
 ## Local controls and server changes
 
-Local changes are saved before their active state is published. They affect only Default's action policy. **Apply privacy changes** is the explicit account-wide write action. Disabling Ghost Mode or removing a contact updates local controls first and leaves a visible server-pending state until Apply restores the managed rules.
+Local changes are saved before their active state is published. The local suppression switch affects only Default's action policy. **Apply privacy changes** is the explicit account-wide write action. Turning local suppression off does not change Telegram privacy. Clear a requested exclusion or remove a selected contact, then Apply to restore managed server rules.
 
 Before writing, the repository fetches current `userPrivacySettingShowStatus` rules. It preserves their order and contents, including unrelated user/chat exceptions and unknown rule fields. A selected-user denial is prepended only when needed. Telegram's user-exception limit is checked before a write. Unchanged proposals do not cause another server write. Privacy operations are serialized independently of message and authentication work.
 
@@ -85,8 +87,8 @@ Automated privacy/action tests use fake TDLib clients and synthetic identities o
 Remaining manual checks with two accounts:
 
 1. Sign in to Default and use a second account as an observer. Record the first account's existing Last Seen & Online rules and other-client settings.
-2. Select the observer contact, enable Ghost Mode and its exact-status exclusion, then Apply. Confirm the exception in an official client and check the observer's normal Last Seen/Online view.
+2. Select the observer contact, request its exact-status exclusion, then Apply. Confirm the exception in an official client and check the observer's normal Last Seen/Online view. Local suppression is an independent control.
 3. Send/read messages and check Telegram's brief online exceptions. If testing Premium, confirm explicit exclusions and activity exceptions separately.
-4. Test any supported outgoing action gateway with the observer selected/unselected. The current build has no routine typing/recorder broadcasts, so a recording UI test cannot be performed yet. Other clients' broadcasts remain outside Default's control.
-5. Disable/remove the observer and Apply. Confirm original unrelated exceptions remain. Change rules from another client and verify conflict review before restoration.
+4. Start voice recording with the observer selected/unselected and compare recording visibility from a second account. Local microphone/gesture and fake-policy tests exist; live peer visibility still requires that second-account check. Other clients' broadcasts remain outside Default's control.
+5. Clear the observer's requested exclusion or remove the observer and Apply. Confirm original unrelated exceptions remain. Change rules from another client and verify conflict review before restoration.
 6. Exercise an offline Apply, refresh/recovery, restart, logout and a different-account login. Confirm correct pending/error states and account separation; restore the test accounts' intended privacy rules afterward.

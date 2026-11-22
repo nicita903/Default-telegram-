@@ -8,6 +8,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -23,8 +24,13 @@ import androidx.navigation.NavType
 import androidx.navigation.compose.*
 import androidx.navigation.navArgument
 import com.vector.messenger.design.ChatAvatar
+import com.vector.messenger.design.DefaultAction
+import com.vector.messenger.design.DefaultDesign
+import com.vector.messenger.design.DefaultDialog
 import com.vector.messenger.design.DefaultHeader
+import com.vector.messenger.design.DefaultIconControl
 import com.vector.messenger.design.VectorMotionSpec
+import com.vector.messenger.design.backdropBlur
 import com.vector.messenger.feature.*
 import com.vector.messenger.navigation.gesture.*
 import kotlinx.coroutines.launch
@@ -81,7 +87,16 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
     val gesture = remember { VectorGestureController() }
     val exclusions = remember { GestureExclusions() }
     val touchExploration = rememberTouchExplorationEnabled()
+    val floatingInterface = com.vector.messenger.design.floatingInterfaceOpen()
     var menu by remember { mutableStateOf(false) }
+    // One dialog for the whole app: the header's New chat control and the chats list both just
+    // flip this, so there is no second copy of the contact picker to keep in sync.
+    var newMessage by remember { mutableStateOf(false) }
+    fun startConversation(id: Long) {
+        newMessage = false
+        chats.open(id)
+        controllers.getValue(AppModule.Chats).navigate(Routes.conversation(id)) { launchSingleTop = true }
+    }
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
     val holder = rememberSaveableStateHolder()
@@ -90,12 +105,18 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
             enabled = preferences.appearance.value.modules,
             searchActive = searchOwnsInput || (searchOpen && (transientChats || navigation.module == AppModule.Chats) &&
                 controllers.getValue(AppModule.Chats).currentBackStackEntry?.destination?.route != Routes.Conversation),
-            modalOpen = menu,
+            modalOpen = menu || newMessage || floatingInterface,
             touchExploration = touchExploration,
         )
     }
-    val gestureScope = "$displayedModule:${entry?.id}:$route:$searchVisible:${appearance.modules}:$touchExploration:$menu"
+    val gestureScope = "$displayedModule:${entry?.id}:$route:$searchOwnsInput:${appearance.modules}:$touchExploration:$menu:$newMessage:$floatingInterface"
     val scale = animateFloatAsState(VectorMotionSpec.surfaceScale(gesture.activated, appearance), VectorMotionSpec.scale(), label = "Module gesture scale")
+    // Aurora: the surface leans 10 dp toward the swipe while the hold charges, so the
+    // gesture reads as a pull before it changes module. Feedback only; no detection changes.
+    val motionStrength = VectorMotionSpec.strength(appearance)
+    val holding = gesture.state == VectorGestureState.Holding || gesture.activated
+    val nudge by animateFloatAsState(if (holding) 1f else 0f, VectorMotionSpec.scale(), label = "Module gesture nudge")
+    val nudgeDirection = if (gesture.direction == VectorGestureDirection.Left) -1f else 1f
     fun previousModule() {
         if (transientChats) transientChats = false
         else if (!navigation.previous()) scope.launch { snackbar.showSnackbar("No previous module", duration = SnackbarDuration.Short) }
@@ -106,19 +127,33 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
             if (direction == VectorGestureDirection.Right) menu = true else previousModule()
         }
     }
+    com.vector.messenger.design.MusicPalette(enabled = displayedModule == AppModule.Music) {
     CompositionLocalProvider(LocalGestureExclusions provides exclusions) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
             .vectorModuleGestures(gesture, modulePolicy, release, config = gestureConfig, haptics = appearance.haptics,
-                enabled = !searchOwnsInput, scopeKey = gestureScope)) {
+                enabled = !searchOwnsInput, scopeKey = gestureScope, contentEnabled = !conversation)) {
             Scaffold(
-                modifier = Modifier.graphicsLayer { scaleX = scale.value; scaleY = scale.value },
+                modifier = Modifier
+                    // The menu is in-window, so its backdrop is this very content: blur it while
+                    // the menu is open. Compose cannot blur what sits behind a composable.
+                    .backdropBlur(menu)
+                    .graphicsLayer {
+                        scaleX = scale.value; scaleY = scale.value
+                        translationX = nudgeDirection * nudge * 10.dp.toPx() * motionStrength
+                    },
                 containerColor = MaterialTheme.colorScheme.background,
                 contentWindowInsets = WindowInsets.safeDrawing,
                 snackbarHost = { SnackbarHost(snackbar) },
-                topBar = {
+                bottomBar = { if (!searchOwnsInput) com.vector.messenger.feature.audio.FloatingAudioPlayer { chatId ->
+                    closeSearch(); menu = false
+                    if (navigation.module != AppModule.Chats) transientChats = true
+                    chats.open(chatId)
+                    controllers.getValue(AppModule.Chats).navigate(Routes.conversation(chatId)) { launchSingleTop = true }
+                } },
+                topBar = { if (!searchOwnsInput) {
                     val internalBack = nav.previousBackStackEntry != null
                     DefaultHeader(
-                        title = if (conversation) contact?.title ?: "Conversation" else if (displayedModule == AppModule.Chats) "Default" else displayedModule.label,
+                        title = if (conversation) contact?.title ?: "Conversation" else if (displayedModule == AppModule.Chats) "DEFAULT" else displayedModule.label,
                         subtitle = if (conversation) { if (chatStatus.live) "Telegram" else "Sample conversation" }
                             else if (searchVisible) "Search workspace" else if (displayedModule == AppModule.Chats) {
                                 if (!chatStatus.live) "Demo chats · not synchronized" else when (chatStatus.connection) {
@@ -129,13 +164,27 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                             } else "",
                         avatarName = if (conversation) contact?.title else null,
                         avatarPhoto = if (conversation) contact?.photo else null,
-                        navigationIcon = if (internalBack || searchVisible) Icons.AutoMirrored.Filled.ArrowBack else Icons.Default.Menu,
-                        navigationDescription = if (searchVisible) "Close search" else if (!internalBack) "Open navigation" else if (conversation && displayedModule == AppModule.Contacts) "Back to contacts" else if (conversation) "Back to chats" else "Back within module",
-                        onNavigation = { if (searchVisible) closeSearch() else if (internalBack) nav.popBackStack() else menu = true },
-                        onMenu = if (internalBack || searchVisible) ({ menu = true }) else null,
+                        // Root controls stay on the edges; nested screens retain their Back action.
+                        leading = {
+                            if (internalBack || searchVisible) {
+                                DefaultIconControl(Icons.AutoMirrored.Filled.ArrowBack,
+                                    if (searchVisible) "Close search" else if (conversation && displayedModule == AppModule.Contacts) "Back to contacts" else if (conversation) "Back to chats" else "Back within module",
+                                    { if (searchVisible) closeSearch() else nav.popBackStack() },
+                                    Modifier.excludeModuleGestures(), quiet = true)
+                            } else {
+                                DefaultIconControl(Icons.Default.Menu, "Open navigation", { menu = true },
+                                    Modifier.excludeModuleGestures(), quiet = true)
+                            }
+                        },
+                        trailing = {
+                            if (internalBack) DefaultIconControl(Icons.Default.Menu, "Open navigation", { menu = true },
+                                Modifier.excludeModuleGestures(), quiet = true)
+                            else if (displayedModule == AppModule.Chats) DefaultIconControl(Icons.Default.Add, "New chat", { newMessage = true },
+                                Modifier.excludeModuleGestures(), quiet = true)
+                        },
                         titleModifier = Modifier.moduleGestureSurface(gesture, ModuleGestureSurface.Header).testTag("header_gesture_surface"),
                     )
-                },
+                } },
             ) { padding ->
                 Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)
                     .moduleGestureSurface(gesture, ModuleGestureSurface.Content).testTag("module_gesture_surface")) {
@@ -152,7 +201,7 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                                     VectorNavigationHost(module, controllers.getValue(module), chats, preferences,
                                         onPrivacy = { transientChats = false; navigation.select(AppModule.Privacy) }, onSearch = { searchScopeName = SearchScope.Chats.name; searchOpen = true })
                                 }
-                                if (module == AppModule.Chats) SearchOverlay(searchVisibility, searchVisible && !menu && !touchExploration,
+                                if (module == AppModule.Chats) SearchOverlay(searchVisibility, searchVisible && !menu && !floatingInterface && !touchExploration,
                                     search, searchScope, blockedAttempt, ::switchSearch, ::closeSearch) { id ->
                                     closeSearch(); chats.open(id); controllers.getValue(AppModule.Chats).navigate(Routes.conversation(id)) { launchSingleTop = true }
                                 }
@@ -161,6 +210,8 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                     }
                 }
             }
+            // Feedback overlay for the same gesture: it consumes no pointer input and sets no semantics.
+            AuroraGestureCue(gesture.state, gesture.direction, appearance.hold)
             // System Back pops an internal screen first, then visit history. At the first root Android exits.
             BackHandler(enabled = !menu && (searchVisible || transientChats || nav.previousBackStackEntry != null || navigation.history.canGoBack)) {
                 if (searchVisible) {
@@ -178,7 +229,16 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
             })
             // Also cover a quick Back before the dialog window has acquired input focus.
             BackHandler(enabled = menu) { menu = false }
+            if (newMessage) DefaultDialog("New message", onDismiss = { newMessage = false }) {
+                Text(if (chatStatus.live) "Choose a Telegram conversation" else "Choose a sample contact",
+                    color = DefaultDesign.colors.secondary, style = MaterialTheme.typography.bodyMedium)
+                Box(Modifier.weight(1f, fill = false)) {
+                    ContactsScreen(allChats.filter { it.isContact }) { startConversation(it) }
+                }
+                DefaultAction("Cancel", { newMessage = false }, Modifier.fillMaxWidth())
+            }
         }
+    }
     }
 }
 

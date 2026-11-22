@@ -41,8 +41,8 @@ fun SearchOverlay(
             Box(Modifier.fillMaxSize().testTag("search_layer").searchWorkspaceInput(scope, inputEnabled, appearance, pull,
                 resultsAtTop = { !(if (scope == SearchScope.Chats) chatList else musicList).canScrollBackward },
                 onDismiss = onClose, onSwitch = { direction ->
-                    if (scope == SearchScope.Chats && direction == SearchGestureAction.NextScope) onScope(SearchScope.Music)
-                    else if (scope == SearchScope.Music && direction == SearchGestureAction.PreviousScope) onScope(SearchScope.Chats)
+                    val target = if (direction == SearchGestureAction.NextScope) SearchScope.Music else SearchScope.Chats
+                    if (target != scope) onScope(target)
                 })) {
                 Box(Modifier.fillMaxSize().graphicsLayer {
                     translationY = if (pull.dragging) searchPullOffset(pull.raw, threshold) * travel else translation.value
@@ -52,8 +52,10 @@ fun SearchOverlay(
                     }, label = "Search scope") { selected ->
                         holder.SaveableStateProvider(selected.name) {
                             CompositionLocalProvider(LocalSearchScope provides selected) {
-                                SearchWorkspace(viewModel, selected, blockedAttempt, onScope, onOpen,
+                                com.vector.messenger.design.MusicPalette(enabled = selected == SearchScope.Music) {
+                                SearchWorkspace(viewModel, selected, blockedAttempt, onScope, onOpen, onClose,
                                     listState = if (selected == SearchScope.Chats) chatList else musicList)
+                                }
                             }
                         }
                     }

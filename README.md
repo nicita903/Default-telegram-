@@ -1,23 +1,27 @@
 # DEFAULT
 
-Official TDLib authentication is available from the module menu's Account button after developer configuration. See [TDLib setup, security, native provenance, and verification](docs/TDLIB_AUTH.md). Chat synchronization remains outside this phase; existing conversations are still demo content.
+Official TDLib authentication is available from the module menu's Account button after developer configuration. Real profile/chat adapters, basic text messaging and Telegram media viewing/downloads reuse that single client. See [TDLib setup, security, native provenance, and verification](docs/TDLIB_AUTH.md), [messaging](docs/TELEGRAM_MESSAGING.md), and [media/download implementation and verification](docs/TELEGRAM_MEDIA.md). Live-service validation and remaining limitations are documented separately from fixture tests.
 
-The foundation now includes Telegram-inspired screens, a floating module menu, and release-only swipe-and-hold navigation. See [design/navigation implementation, changed files, and verification](docs/DESIGN_NAVIGATION.md). Existing architecture and build versions are preserved.
+The foundation now includes Telegram-inspired screens, a full-screen module menu, and release-only swipe-and-hold navigation. See [design/navigation implementation, changed files, and verification](docs/DESIGN_NAVIGATION.md). Existing architecture and build versions are preserved.
 
 DEFAULT is the user-requested name for the Vector specification. Application ID: `com.vector.messenger`. Android 10 / API 29 minimum; compile and target API 36.
 
-The messaging foundation contains explicitly labeled, fictional demo conversations. The separate TDLib layer supports account authentication, but real chat synchronization, privacy enforcement, notifications, audio import, and playback are not implemented. Demo messages and per-contact Ghost Mode selections live only in memory. Theme and preview preferences use SavedStateHandle for activity/state restoration, not durable settings storage.
+Signed-out conversations remain an explicitly labeled demonstration source. Authenticated messaging uses TDLib data without merging demonstration chats. Appearance settings persist locally; selective Ghost policies use account-bound encrypted storage and separate server privacy confirmation. Messenger notifications remain unimplemented. Music now shares the Media3 engine and supports background playback through a media session; voice/video remain foreground-only. The [0.5 audit](docs/DEFAULT_05_AUDIT.md) records the earlier implementation snapshot; subsequent media, voice and music reports document newer capabilities.
 
 ## Implemented
 
 - MVVM, repository contracts, StateFlow, lifecycle-aware collection, and Hilt dependency injection.
-- Central AMOLED dark, light, and system themes, Material typography, and spacing tokens.
-- Edge-to-edge layout, standard text input, IME padding, floating module menu, right/left swipe-and-hold navigation, retained module screen stacks, system back handling, and conversation back button. No permanent navigation bar.
+- One theme: Aurora. A single dark canvas, Material typography, and spacing tokens; the earlier Telegram Glass and Soft Console designs and the Light/Dark/System modes were removed. See [Aurora](docs/AURORA.md).
+- Appearance offers AMOLED Black, accent (blue/violet/teal), glass surface opacity, supported-overlay blur, borders and reduced transparency. Headers, composer, dialogs and the module menu use the shared hairline glass material; chat rows remain lightweight and the visible chat-filter bar is removed.
+- Edge-to-edge layout, standard text input, IME padding, full-screen module menu, right/left swipe-and-hold navigation with an Aurora hold cue, retained module screen stacks, system back handling, and conversation back button. No permanent navigation bar.
 - Searchable chat list with stable keys, unread filter/badges, pinned sorting, archive/unarchive, and contextual actions.
 - Demonstration history, grouped bubbles, local composer, swipe-to-reply, reply previews, reaction toggles, and document selection. Local messages are labeled and never presented as delivered/read by Telegram. Validation retains failed drafts; demo history is bounded to 100 messages per chat. Selected attachments reference local document URIs and are not uploaded.
 - Contacts, settings, appearance selection, and notification-preview demonstration controls.
 - Per-contact Ghost Mode UI for typing, recording, online, and last seen, with Telegram limitations explained.
 - Music sections for tracks, albums, artists, playlists, favorites, and recently played, with honest empty states. Downloads has a separate destination.
+- Telegram photo/video/animation/document metadata, sampled conversation previews, a zoomable photo viewer, lifecycle-bound Media3/GIF playback, and a TDLib-backed Downloads manager. Open/share uses restricted, revocable content grants rather than filesystem URLs. See the media report for supported formats, tests and limitations.
+- Hold/release voice recording with cancel/lock gestures, mono Ogg/Opus encoding, native TDLib voice sends, real amplitude/Telegram waveforms, shared voice/audio playback and a compact floating controller. See [voice/audio implementation and verification](docs/VOICE_AUDIO.md). Playback is foreground-only; live Telegram voice delivery still requires account testing.
+- Offline Music: MediaStore discovery, eligible private Telegram downloads, albums/artists/folders, persistent local playlists and recent history, a reorderable queue, shuffle/repeat/speed, Now Playing and one global mini player. See [music architecture, verification and limits](docs/OFFLINE_MUSIC.md). Device music needs audio-media permission; Telegram cache entries need the existing authenticated account.
 - Repository, ViewModel, settings restoration, route validation, and Compose interaction tests.
 
 ## Project structure

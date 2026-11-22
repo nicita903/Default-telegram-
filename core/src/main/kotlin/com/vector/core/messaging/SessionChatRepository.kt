@@ -148,7 +148,7 @@ class SessionChatRepository(
                     change(update.chatId) { it.copy(chat = it.chat.copy(preview = update.text)) }
                 if (active == update.chatId) {
                     revision++; versions[update.messageId] = revision
-                    window[update.messageId]?.takeUnless { it.restricted }?.let { window[update.messageId] = it.copy(text = update.text) }; publishMessages()
+                    window[update.messageId]?.takeUnless { it.restricted }?.let { window[update.messageId] = it.copy(text = update.text, media = update.media) }; publishMessages()
                 }
             }
             is ChatUpdate.Deleted -> if (active == update.chatId) {
@@ -234,6 +234,22 @@ class SessionChatRepository(
         val session = epoch
         return try {
             val message = client.sendText(chatId, text, replyTo)
+            currentCoroutineContext().ensureActive()
+            if (!live || session != epoch) SendResult.MissingChat
+            else { put(message); publishMessages(); SendResult.Sent }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { if ((failure as? MessagingException)?.failure == MessagingFailure.Network) SendResult.Uncertain else SendResult.Failed }
+        finally { if (session == epoch) sends.remove(chatId) }
+    }
+    override suspend fun sendVoice(chatId: Long, clip: com.vector.core.audio.VoiceClip, replyTo: Long?): SendResult {
+        if (!live) return SendResult.Unsupported
+        if (clip.duration !in 1..600 || clip.path.isBlank() || clip.waveform.size > 100) return SendResult.Empty
+        val record = records[chatId] ?: return SendResult.MissingChat
+        if (!projected(record).canSend) return SendResult.Forbidden
+        if (!sends.add(chatId)) return SendResult.Failed
+        val session = epoch
+        return try {
+            val message = client.sendVoice(chatId, clip, replyTo)
             currentCoroutineContext().ensureActive()
             if (!live || session != epoch) SendResult.MissingChat
             else { put(message); publishMessages(); SendResult.Sent }

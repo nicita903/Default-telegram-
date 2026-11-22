@@ -28,6 +28,9 @@ import com.vector.core.auth.*
 import com.vector.core.profile.ProfileState
 import com.vector.messenger.design.DefaultAction
 import com.vector.messenger.design.DefaultIconControl
+import com.vector.messenger.design.DefaultDialog
+import com.vector.messenger.design.FloatingBackdropHost
+import com.vector.messenger.design.designCanvas
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -36,8 +39,10 @@ fun AuthenticationDialog(viewModel: AuthenticationViewModel, profile: ProfileVie
     val state by viewModel.state.collectAsStateWithLifecycle()
     val profileState by profile.state.collectAsStateWithLifecycle()
     Dialog(onDismissRequest = onClose, properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false, securePolicy = SecureFlagPolicy.SecureOn)) {
+        FloatingBackdropHost {
         Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
             AuthenticationContent(state, viewModel::submit, viewModel::start, onClose, profileState, profile::refresh)
+        }
         }
     }
 }
@@ -49,7 +54,7 @@ internal fun AuthenticationContent(state: AuthState, submit: (AuthAction) -> Uni
     // Authentication input is deliberately not rememberSaveable and never enters a SavedStateHandle.
     var input by remember(step) { mutableStateOf("") }
     var logoutConfirmation by remember { mutableStateOf(false) }
-    Column(Modifier.fillMaxSize().safeDrawingPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Column(Modifier.fillMaxSize().designCanvas().safeDrawingPadding().imePadding().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Text("Telegram account", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
             DefaultIconControl(Icons.Default.Close, "Close account", { input = ""; onClose() }, quiet = true)
@@ -116,8 +121,11 @@ internal fun AuthenticationContent(state: AuthState, submit: (AuthAction) -> Uni
         }
         state.error?.let { Text(it, color = MaterialTheme.colorScheme.error) }
     }
-    if (logoutConfirmation) AlertDialog(onDismissRequest = { logoutConfirmation = false }, title = { Text("Log out of Telegram?") }, text = { Text("This closes the Telegram session and removes its local TDLib data after Telegram confirms logout. Demo chats are separate.") },
-        confirmButton = { TextButton(onClick = { logoutConfirmation = false; submit(AuthAction.Logout) }) { Text("Log out") } }, dismissButton = { TextButton(onClick = { logoutConfirmation = false }) { Text("Cancel") } })
+    if (logoutConfirmation) DefaultDialog("Log out of Telegram?", { logoutConfirmation = false }) {
+        Text("This closes the Telegram session and removes its local TDLib data after Telegram confirms logout. Demo chats are separate.")
+        DefaultAction("Log out", { logoutConfirmation = false; submit(AuthAction.Logout) }, destructive = true)
+        DefaultAction("Cancel", { logoutConfirmation = false })
+    }
 }
 
 @Composable

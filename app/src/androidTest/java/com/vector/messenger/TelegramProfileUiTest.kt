@@ -3,7 +3,6 @@ package com.vector.messenger
 import androidx.compose.runtime.*
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
-import com.vector.core.ThemeMode
 import com.vector.core.profile.*
 import com.vector.messenger.design.DefaultTheme
 import com.vector.messenger.feature.AccountProfileContent
@@ -22,7 +21,7 @@ class TelegramProfileUiTest {
             bitmap.recycle()
             val profile = TelegramProfile(99, "Fixture", "Account", null, null, ProfilePhoto(7, file.path))
             val state = mutableStateOf(ProfileState(authenticated = true, profile = profile, connection = ProfileConnection.Ready))
-            compose.setContent { DefaultTheme(ThemeMode.Dark) { AccountProfileContent(state.value, {}) } }
+            compose.setContent { DefaultTheme { AccountProfileContent(state.value, {}) } }
             compose.waitUntil(5000) { compose.onAllNodesWithContentDescription("Telegram profile picture").fetchSemanticsNodes().isNotEmpty() }
             compose.onNodeWithContentDescription("Telegram profile picture").assertIsDisplayed()
             compose.runOnIdle { state.value = state.value.copy(profile = profile.copy(photo = null)) }
@@ -33,7 +32,7 @@ class TelegramProfileUiTest {
     @Test fun missingFieldsLoadingOfflineAndLogoutRenderWithoutDemoIdentity() {
         val state = mutableStateOf(ProfileState(authenticated = true, loading = true, connection = ProfileConnection.Ready))
         var refreshed = false
-        compose.setContent { DefaultTheme(ThemeMode.Dark) { AccountProfileContent(state.value, { refreshed = true }) } }
+        compose.setContent { DefaultTheme { AccountProfileContent(state.value, { refreshed = true }) } }
         compose.onNodeWithText("Loading Telegram profile…").assertIsDisplayed()
         compose.runOnIdle { state.value = ProfileState(authenticated = true,
             profile = TelegramProfile(99, "Fixture", "", null, null, null), connection = ProfileConnection.WaitingForNetwork) }
@@ -50,7 +49,7 @@ class TelegramProfileUiTest {
     @Test fun userUpdatesReplaceTheDisplayedProfileFields() {
         val profile = TelegramProfile(99, "Fixture", "Account", "fixture_handle", "12025550123", null)
         val state = mutableStateOf(ProfileState(authenticated = true, profile = profile, connection = ProfileConnection.Ready))
-        compose.setContent { DefaultTheme(ThemeMode.Dark) { AccountProfileContent(state.value, {}) } }
+        compose.setContent { DefaultTheme { AccountProfileContent(state.value, {}) } }
         compose.onNodeWithText("Fixture Account").assertIsDisplayed()
         compose.onNodeWithText("+12025550123").assertIsDisplayed()
         compose.runOnIdle { state.value = state.value.copy(profile = profile.copy(firstName = "Updated", username = null)) }

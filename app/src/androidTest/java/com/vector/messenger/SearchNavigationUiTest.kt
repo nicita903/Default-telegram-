@@ -78,14 +78,15 @@ class SearchNavigationUiTest {
         compose.onNodeWithContentDescription("Open navigation").performClick()
         compose.onNodeWithText("Music").performClick()
         compose.onNodeWithText("Playlists").performClick()
-        compose.onNodeWithText("No playlists yet").assertIsDisplayed()
+        compose.onNodeWithTag("music_section:Playlists").assertIsDisplayed()
         compose.onNodeWithContentDescription("Open navigation").performClick()
         compose.onNodeWithText("Search").performClick()
         compose.onNodeWithText("Chat Search").assertIsDisplayed()
         dismissHeader()
         compose.onNodeWithTag("chat_list").assertIsDisplayed()
         back() // Reveal the unchanged history head (Music) without popping it.
-        compose.waitUntil(3000) { compose.onAllNodesWithText("No playlists yet").fetchSemanticsNodes().isNotEmpty() }
+        compose.waitUntil(3000) { compose.onAllNodesWithTag("music_section:Playlists").fetchSemanticsNodes().isNotEmpty() }
+        compose.onNodeWithTag("music_section:Playlists").assertIsDisplayed()
         back() // Music's internal screen pops before module history.
         compose.onNodeWithText("Your offline library").assertIsDisplayed()
         back() // Original Music -> Chats history is still intact.

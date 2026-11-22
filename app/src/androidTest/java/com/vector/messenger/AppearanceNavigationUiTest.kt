@@ -37,7 +37,7 @@ class AppearanceNavigationUiTest {
         update { it.copy(compact = false, typeScale = 115, accent = 2) }
         Assert.assertTrue(row.fetchSemanticsNode().boundsInRoot.height > rowBefore)
         Assert.assertTrue(text.fetchSemanticsNode().boundsInRoot.height > textBefore)
-        compose.onNodeWithText("New chat").assertIsDisplayed()
+        compose.onNodeWithContentDescription("New chat").assertIsDisplayed()
         update { it.copy(compact = true, typeScale = 100, accent = 0) }
         Assert.assertEquals(rowBefore, row.fetchSemanticsNode().boundsInRoot.height, .5f)
     }

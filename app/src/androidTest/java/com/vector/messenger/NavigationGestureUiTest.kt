@@ -77,9 +77,9 @@ class NavigationGestureUiTest {
         openModule("Ghost Mode"); compose.onNodeWithText("Suppress typing · Alex Morgan").assertIsDisplayed()
         openModule("Settings"); compose.onNodeWithText("Appearance").assertIsDisplayed()
         openModule("Music"); compose.onNodeWithText("Playlists").performClick()
-        compose.onNodeWithText("No playlists yet").assertIsDisplayed()
+        compose.onNodeWithTag("music_section:Playlists").assertIsDisplayed()
         openModule("Chats"); openChatSearch(compose); compose.onNodeWithText("Search conversations").performTextInput("Mira")
-        openModule("Music"); compose.onNodeWithText("No playlists yet").assertIsDisplayed()
+        openModule("Music"); compose.onNodeWithTag("music_section:Playlists").assertIsDisplayed()
         systemBack() // Internal Music screen before module history.
         compose.onNodeWithText("Your offline library").assertIsDisplayed()
         systemBack()

@@ -9,6 +9,7 @@ import androidx.compose.ui.unit.dp
 
 /** Small code-native line icons; no additional icon dependency. */
 object VectorIcons {
+    val Microphone by lazy { icon("Microphone") { moveTo(9f, 11f); lineTo(9f, 5f); curveTo(9f, 1f, 15f, 1f, 15f, 5f); lineTo(15f, 11f); curveTo(15f, 15f, 9f, 15f, 9f, 11f); moveTo(6f, 10f); curveTo(6f, 20f, 18f, 20f, 18f, 10f); moveTo(12f, 18f); lineTo(12f, 22f); moveTo(8f, 22f); lineTo(16f, 22f) } }
     val Minus by lazy { icon("Decrease") { moveTo(6f, 12f); lineTo(18f, 12f) } }
     private fun icon(name: String, block: PathBuilder.() -> Unit) = ImageVector.Builder(name, 24.dp, 24.dp, 24f, 24f).apply {
         path(fill = null, stroke = SolidColor(Color.Black), strokeLineWidth = 1.7f, strokeLineCap = StrokeCap.Round, strokeLineJoin = StrokeJoin.Round, pathBuilder = block)

@@ -41,6 +41,12 @@ class MessagingRepositoryTest {
             if (failure) throw MessagingException(MessagingFailure.Network)
             return result
         }
+        override suspend fun sendVoice(chatId: Long, clip: com.vector.core.audio.VoiceClip, replyTo: Long?): Message {
+            calls += "voice"
+            sendGate?.await()
+            if (failure) throw MessagingException(MessagingFailure.Network)
+            return sent.copy(chatId = chatId)
+        }
         override suspend fun resend(chatId: Long, messageId: Long): List<Message> { calls += "retry"; return listOf(sent.copy(chatId = chatId)) }
         override suspend fun openChat(chatId: Long) { calls += "open:$chatId" }
         override suspend fun closeChat(chatId: Long) { calls += "close:$chatId" }
@@ -52,6 +58,19 @@ class MessagingRepositoryTest {
     private fun chat(id: Long = -100, order: Long = 10, archived: Boolean = false, pinned: Boolean = false) =
         TelegramChat(Chat(id, "Synthetic", "Preview", "12:00", unread = 5), listOf(ChatPosition(archived, order, pinned)))
     private suspend fun Client.event(update: ChatUpdate) { events.send(update) }
+    @Test fun voiceSubmissionUsesNativePendingAndDoesNotInventDeliveryOrCrossSessions() = runTest {
+        val auth = Auth(); val client = Client(); val repo = SessionChatRepository(auth, client, DemoChatRepository(), backgroundScope)
+        auth.ready(true); runCurrent(); client.event(ChatUpdate.Snapshot(chat())); runCurrent(); repo.openConversation(-100); runCurrent()
+        val clip = com.vector.core.audio.VoiceClip("/fixture/voice.ogg", 2, listOf(0, 31))
+        assertEquals(SendResult.Sent, repo.sendVoice(-100, clip, null))
+        assertEquals(Delivery.Sending, repo.messages.value.single().delivery)
+        assertEquals(1, client.calls.count { it == "voice" })
+        client.failure = true
+        assertEquals(SendResult.Uncertain, repo.sendVoice(-100, clip, null))
+        auth.ready(false); runCurrent()
+        assertEquals(SendResult.Unsupported, repo.sendVoice(-100, clip, null))
+        assertTrue(repo.messages.value.none { it.chatId == -100L })
+    }
     @Test fun signedInSourceNeverMergesDemoAndStartupEventsAreRetained() = runTest {
         val auth = Auth(); val client = Client()
         client.event(ChatUpdate.Snapshot(chat()))
@@ -158,6 +177,20 @@ class MessagingRepositoryTest {
         assertTrue(repo.messages.value.isEmpty()); assertEquals("Content unavailable", repo.chats.value.single().preview)
         client.event(ChatUpdate.Upsert(message(11))); runCurrent(); assertTrue(repo.messages.value.isEmpty())
         assertEquals(SendResult.Forbidden, repo.send(-100, "Synthetic"))
+    }
+    @Test fun openingHistoryAndClosingDoNotReportReadsUntilMessagesAreActuallyVisible() = runTest {
+        val auth = Auth(); val client = Client(); val repo = SessionChatRepository(auth, client, DemoChatRepository(), backgroundScope)
+        auth.ready(true); runCurrent(); client.event(ChatUpdate.Snapshot(chat())); runCurrent()
+        client.pages[0] = listOf(message(10))
+        repo.markRead(-100); repo.openConversation(-100); runCurrent()
+        assertTrue(client.calls.none { it.startsWith("view:") })
+        assertEquals(5, repo.chats.value.single().unread)
+        repo.viewMessages(-100, listOf(10)); runCurrent()
+        assertEquals(1, client.calls.count { it.startsWith("view:") })
+        assertEquals(5, repo.chats.value.single().unread) // A local callback cannot fabricate server read state.
+        repo.closeConversation(-100); runCurrent(); repo.viewMessages(-100, listOf(10)); runCurrent()
+        assertEquals(1, client.calls.count { it.startsWith("view:") })
+        client.event(ChatUpdate.Unread(-100, 0)); runCurrent(); assertEquals(0, repo.chats.value.single().unread)
     }
     companion object {
         private fun message(id: Long, delivery: Delivery = Delivery.Received) = Message(id, -100, "Synthetic fixture", "12:00", delivery)

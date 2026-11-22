@@ -5,14 +5,12 @@ import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.AndroidComposeTestRule
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.ViewModelProvider
-import com.vector.core.ThemeMode
 import com.vector.messenger.feature.AppearanceSettings
 import com.vector.messenger.feature.PreferencesViewModel
 
 /** Persisted user appearance is restored after every test, including assertion failures. */
 class TerminalTestAppearance(private val compose: AndroidComposeTestRule<*, MainActivity>) {
     private lateinit var previous: AppearanceSettings
-    private lateinit var theme: String
     private lateinit var preferences: PreferencesViewModel
     fun before() {
         lateinit var authentication: com.vector.messenger.feature.AuthenticationViewModel
@@ -25,14 +23,12 @@ class TerminalTestAppearance(private val compose: AndroidComposeTestRule<*, Main
             compose.activity.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             preferences = ViewModelProvider(compose.activity)[PreferencesViewModel::class.java]
             previous = preferences.appearance.value
-            theme = preferences.theme.value
             preferences.appearance { AppearanceSettings() }
-            preferences.theme(ThemeMode.Dark)
         }
         compose.waitForIdle()
     }
     fun after() { if (::preferences.isInitialized) compose.runOnUiThread {
-        preferences.appearance { previous }; preferences.theme(ThemeMode.valueOf(theme))
+        preferences.appearance { previous }
         compose.activity.window.clearFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
     } }
 }

@@ -51,6 +51,7 @@ class FoundationUiTest {
         compose.onNodeWithContentDescription("Open navigation").performClick()
         compose.onNodeWithText("Music").performClick()
         compose.onNodeWithText("Albums").performClick()
-        compose.onNodeWithText("No albums yet").assertIsDisplayed()
+        // Navigation must also work when the device has a populated music library.
+        compose.onNodeWithTag("music_section:Albums").assertIsDisplayed()
     }
 }

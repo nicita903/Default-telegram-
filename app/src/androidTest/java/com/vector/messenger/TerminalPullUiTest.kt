@@ -11,7 +11,6 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.*
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.unit.dp
-import com.vector.core.ThemeMode
 import com.vector.messenger.design.DefaultTheme
 import com.vector.messenger.navigation.gesture.*
 import org.junit.*
@@ -22,7 +21,7 @@ class TerminalPullUiTest {
     private var opens = 0
     private fun content() {
         compose.setContent {
-            DefaultTheme(ThemeMode.Dark) {
+            DefaultTheme {
                 val list = rememberLazyListState()
                 val pull = remember { PullSearchState() }
                 Box(Modifier.fillMaxSize().pullToSearch(list, pull, true, 72, false) { opens++ }) {

@@ -34,6 +34,7 @@ fun TelegramAvatar(name: String, photo: ProfilePhoto?, size: Dp) {
             }
         }
         if (bitmap == null) ChatAvatar(name, size)
-        else Image(bitmap!!, "Conversation picture", Modifier.size(size).clip(CircleShape), contentScale = ContentScale.Crop)
+        else Image(bitmap!!, "Conversation picture", Modifier.size(size).clip(DefaultDesign.avatarShape)
+, contentScale = ContentScale.Crop)
     }
 }

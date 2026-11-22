@@ -15,7 +15,7 @@ import androidx.compose.ui.unit.dp
 @Composable
 fun ChatAvatar(name: String, size: Dp = 54.dp) {
     val colors = DefaultDesign.colors
-    Box(Modifier.size(size).background(colors.panel, CircleShape).border(1.dp, colors.line, CircleShape), contentAlignment = Alignment.Center) {
-        Text(name.split(" ").take(2).joinToString("") { it.take(1) }.uppercase(), color = colors.text, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.titleMedium)
+    Box(Modifier.size(size).background(colors.accent.copy(alpha = .18f), DefaultDesign.avatarShape), contentAlignment = Alignment.Center) {
+        Text(name.split(" ").take(2).joinToString("") { it.take(1) }.uppercase(), color = colors.active, fontWeight = FontWeight.Medium, style = MaterialTheme.typography.titleMedium)
     }
 }

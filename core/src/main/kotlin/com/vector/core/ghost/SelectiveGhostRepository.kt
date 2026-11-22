@@ -15,6 +15,7 @@ class SelectiveGhostRepository(authentication: AuthenticationRepository, private
     private var sessionScope: CoroutineScope? = null
     private var account: Long? = null
     private var currentRules: List<PrivacyRule>? = null
+    private var rulesRevision = 0L
     private var generation = 0L
     private var contactRevision = 0L
     private val contactVersions = mutableMapOf<Long, Long>()
@@ -30,7 +31,8 @@ class SelectiveGhostRepository(authentication: AuthenticationRepository, private
         scope.launch {
             authentication.state.map { it.step == AuthStep.Ready }.distinctUntilChanged().collectLatest { ready ->
                 generation++; account = null; currentRules = null; contactVersions.clear(); contactCache.clear(); contactPublication = null; contactRevision = 0
-                mutable.value = GhostState(authenticated = ready, busy = ready)
+                rulesRevision = 0
+                mutable.value = GhostState(authenticated = ready, busy = ready, operation = if (ready) GhostOperation.Loading else GhostOperation.Idle)
                 if (!ready) return@collectLatest
                 coroutineScope {
                     sessionScope = this
@@ -38,6 +40,7 @@ class SelectiveGhostRepository(authentication: AuthenticationRepository, private
                         launch(start = CoroutineStart.UNDISPATCHED) {
                             client.events.collect { event -> when (event) {
                                 is GhostEvent.Rules -> {
+                                    rulesRevision++
                                     currentRules = event.rules
                                     if (!mutable.value.busy) reconcileDisplay()
                                 }
@@ -49,6 +52,7 @@ class SelectiveGhostRepository(authentication: AuthenticationRepository, private
                                         yield()
                                         val contacts = contactCache.values.sortedBy { it.name.lowercase() }
                                         mutable.update { it.copy(contacts = contacts) }
+                                        if (!mutable.value.busy) reconcileDisplay() // Contact/Premium predicates can change effective privacy.
                                     }
                                 }
                             } }
@@ -65,15 +69,25 @@ class SelectiveGhostRepository(authentication: AuthenticationRepository, private
             val id = client.accountId(); currentCoroutineContext().ensureActive(); account = id
             val saved = store.load(id); currentCoroutineContext().ensureActive()
             mutable.update { it.copy(saved = saved, initialized = true) }
-            try { val contacts = clientContacts(); mutable.update { it.copy(contacts = contacts) } }
+            try { val contacts = clientContacts(); mutable.update { it.copy(contacts = contacts, contactsLoaded = true) } }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { mutable.update { it.copy(error = "Unable to load Telegram contacts. Refresh to retry.") } }
-            try { currentRules = client.rules(); reconcilePending(id); reconcileDisplay() }
+            try { readRules(); reconcilePending(id); reconcileDisplay() }
             catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { mutable.update { it.copy(error = "Unable to read Telegram privacy rules. Local controls remain separate.") } }
+            catch (_: Exception) { mutable.update { it.copy(error = "Unable to read Telegram privacy rules. Local controls remain separate.", serverError = "Failed to refresh Telegram privacy.", confirmed = false) } }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { mutable.update { it.copy(error = "Private preferences could not be loaded. Outgoing private-chat indicators are paused. Refresh to retry.") } }
-        finally { mutable.update { it.copy(busy = false) } }
+        finally { mutable.update { it.copy(busy = false, operation = GhostOperation.Idle) } }
+    }
+    private suspend fun readRules(): List<PrivacyRule> {
+        val before = rulesRevision
+        val fetched = client.rules(); currentCoroutineContext().ensureActive()
+        if (before == rulesRevision || currentRules == null) currentRules = fetched
+        mutable.update { it.copy(serverError = null) }
+        return currentRules ?: fetched
+    }
+    private fun excludesRequested(rules: List<PrivacyRule>, users: Set<Long>) = users.all { id ->
+        visibilityDecision(rules, id, if (mutable.value.contactsLoaded) id in contactCache else null, contactCache[id]?.premium) == VisibilityDecision.Restricted
     }
     private suspend fun clientContacts(): List<GhostContact> {
         val before = contactRevision
@@ -90,24 +104,33 @@ class SelectiveGhostRepository(authentication: AuthenticationRepository, private
         val conflict = (journal.applied != null && rules != null && rules != journal.applied) ||
             (journal.pending != null && rules != null && rules != journal.pending.before && rules != journal.pending.after)
         mutable.value = state.copy(serverLoaded = rules != null, conflict = conflict,
-            confirmed = !conflict && journal.pending == null && journal.target == state.saved.desiredStatus() &&
-                rules != null && excludesUsers(rules, state.saved.desiredStatus()))
+            confirmed = state.serverError == null && !conflict && journal.pending == null && journal.target == state.saved.desiredStatus() &&
+                rules != null && excludesRequested(rules, state.saved.desiredStatus()),
+            visibility = state.saved.contacts.keys.associateWith { id ->
+                if (rules == null) CapabilityStatus.Unsupported else when (visibilityDecision(rules, id,
+                    if (state.contactsLoaded) id in contactCache else null, contactCache[id]?.premium)) {
+                    VisibilityDecision.Restricted -> CapabilityStatus.Enabled
+                    VisibilityDecision.Allowed -> CapabilityStatus.Disabled
+                    VisibilityDecision.Unknown -> CapabilityStatus.Unsupported
+                }
+            })
     }
     private suspend fun persist(saved: GhostSaved) {
         val id = account ?: return
         store.save(id, saved); currentCoroutineContext().ensureActive()
         mutable.update { it.copy(saved = saved) }; reconcileDisplay()
     }
-    private fun operation(requireInitialized: Boolean = true, block: suspend () -> Unit) {
+    private fun operation(requireInitialized: Boolean = true, kind: GhostOperation = GhostOperation.Saving, block: suspend () -> Unit) {
         if (!mutable.value.authenticated || mutable.value.busy || (requireInitialized && !mutable.value.initialized) || !requests.tryLock()) return
         val currentScope = sessionScope
         if (currentScope == null) { requests.unlock(); return }
-        mutable.update { it.copy(busy = true, error = null) }
+        mutable.update { it.copy(busy = true, operation = kind, error = null) }
         currentScope.launch {
             try { block() }
             catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { mutable.update { it.copy(error = "Privacy request failed. No success is assumed; refresh before retrying.", confirmed = false) } }
-            finally { mutable.update { it.copy(busy = false) }; requests.unlock() }
+            catch (_: Exception) { mutable.update { it.copy(error = "Privacy request failed. No success is assumed; refresh before retrying.",
+                serverError = if (kind != GhostOperation.Saving) "Failed to confirm Telegram privacy. Refresh to retry." else it.serverError, confirmed = false) } }
+            finally { mutable.update { it.copy(busy = false, operation = GhostOperation.Idle) }; reconcileDisplay(); requests.unlock() }
         }
     }
     override fun enabled(value: Boolean) = operation { persist(mutable.value.saved.copy(enabled = value)) }
@@ -120,27 +143,32 @@ class SelectiveGhostRepository(authentication: AuthenticationRepository, private
         if (userId !in mutable.value.saved.contacts) return@operation
         persist(mutable.value.saved.copy(contacts = mutable.value.saved.contacts + (userId to value)))
     }
-    override fun refresh() = operation(requireInitialized = false) {
+    override fun refresh() = operation(requireInitialized = false, kind = GhostOperation.Loading) {
         if (!mutable.value.initialized) initialize()
         else {
-            val contacts = clientContacts(); mutable.update { it.copy(contacts = contacts) }
-            currentRules = client.rules(); reconcilePending(account!!); reconcileDisplay()
+            // Contact refresh failure must not prevent a separate server-privacy refresh.
+            try { val contacts = clientContacts(); mutable.update { it.copy(contacts = contacts, contactsLoaded = true) } }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { mutable.update { it.copy(error = "Failed to refresh contacts; privacy rules are checked separately.") } }
+            readRules(); reconcilePending(account!!); reconcileDisplay()
         }
     }
     private suspend fun reconcilePending(id: Long) {
         val saved = mutable.value.saved
         val pending = saved.journal.pending ?: return
-        val journal = when (currentRules) {
-            pending.after -> saved.journal.copy(applied = currentRules, target = pending.target, pending = null)
-            pending.before -> saved.journal.copy(pending = null)
+        val actual = currentRules ?: return
+        val journal = when {
+            actual == pending.after || (excludesRequested(actual, pending.target) && preservesOtherUsers(pending.after, actual, pending.target)) ->
+                saved.journal.copy(applied = actual, target = pending.target, pending = null)
+            actual == pending.before -> saved.journal.copy(pending = null)
             else -> { mutable.update { it.copy(conflict = true, confirmed = false) }; return }
         }
         store.save(id, saved.copy(journal = journal)); currentCoroutineContext().ensureActive()
         mutable.update { it.copy(saved = saved.copy(journal = journal)) }
     }
-    override fun applyPrivacy() = operation {
+    override fun applyPrivacy() = operation(kind = GhostOperation.Applying) {
         val id = account ?: return@operation
-        val observed = client.rules(); currentRules = observed
+        val observed = readRules()
         reconcilePending(id)
         val saved = mutable.value.saved
         val journal = saved.journal
@@ -149,7 +177,7 @@ class SelectiveGhostRepository(authentication: AuthenticationRepository, private
         }
         val baseline = journal.baseline ?: observed
         val desired = saved.desiredStatus()
-        val proposed = try { statusExceptions(baseline, desired) } catch (_: IllegalArgumentException) {
+        val proposed = try { if (excludesRequested(baseline, desired)) baseline else statusExceptions(baseline, desired) } catch (_: IllegalArgumentException) {
             mutable.update { it.copy(error = "Telegram's 1,000 user-exception limit would be exceeded.") }; return@operation
         }
         if (proposed != observed) {
@@ -158,8 +186,8 @@ class SelectiveGhostRepository(authentication: AuthenticationRepository, private
             // Recheck the most recently received update before replacing this account-wide setting.
             if (currentRules != observed) { mutable.update { it.copy(conflict = true, confirmed = false) }; return@operation }
             client.setRules(proposed)
-            val confirmed = client.rules(); currentCoroutineContext().ensureActive(); currentRules = confirmed
-            if (!excludesUsers(confirmed, desired) || (desired.isEmpty() && confirmed != proposed)) {
+            val confirmed = readRules()
+            if (!excludesRequested(confirmed, desired) || !preservesOtherUsers(proposed, confirmed, desired) || (desired.isEmpty() && confirmed != proposed)) {
                 mutable.update { it.copy(conflict = true, confirmed = false, error = "Telegram privacy changes could not be confirmed. Refresh to review.") }; return@operation
             }
         }
@@ -167,9 +195,9 @@ class SelectiveGhostRepository(authentication: AuthenticationRepository, private
         val next = if (desired.isEmpty()) PrivacyJournal() else PrivacyJournal(baseline, applied, desired)
         persist(mutable.value.saved.copy(journal = next)); reconcileDisplay()
     }
-    override fun useCurrentRules() = operation {
+    override fun useCurrentRules() = operation(kind = GhostOperation.Loading) {
         // Explicit conflict recovery keeps all current server rules. It never guesses ownership of exceptions.
-        currentRules = client.rules()
+        readRules()
         persist(mutable.value.saved.copy(journal = PrivacyJournal()))
         mutable.update { it.copy(error = "Current Telegram rules kept. Existing exclusions remain; Apply only adds your selected exclusions.") }
     }

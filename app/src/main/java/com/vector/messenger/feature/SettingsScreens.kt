@@ -17,21 +17,39 @@ import com.vector.messenger.navigation.gesture.excludeModuleGestures
 import com.vector.messenger.design.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
+import androidx.compose.foundation.border
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clip
+import androidx.compose.foundation.Canvas
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import kotlin.math.roundToInt
 
 @Composable
 fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit) {
-    val theme by viewModel.theme.collectAsStateWithLifecycle()
     val previews by viewModel.hidePreviews.collectAsStateWithLifecycle()
     val settings by viewModel.appearance.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp).testTag("settings_scroll"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Text("Appearance", style = MaterialTheme.typography.titleMedium)
-        Row(Modifier.excludeModuleGestures(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            ThemeMode.entries.forEach { mode -> DefaultAction("${mode.name} theme", { viewModel.theme(mode) }, Modifier.weight(1f), emphasized = theme == mode.name) }
+        Text("Background", style = MaterialTheme.typography.titleMedium)
+        Row(Modifier.fillMaxWidth().excludeModuleGestures(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            DefaultAction("Standard Dark", { viewModel.appearance { it.copy(amoledBlack = false) } }, Modifier.weight(1f), emphasized = !settings.amoledBlack)
+            DefaultAction("AMOLED Black", { viewModel.appearance { it.copy(amoledBlack = true) } }, Modifier.weight(1f), emphasized = settings.amoledBlack)
         }
+        Text("Aurora keeps one dark canvas. AMOLED replaces the base with pure black and leaves the colour field in place.",
+            style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.secondary)
+        Text("Surfaces", style = MaterialTheme.typography.titleMedium)
+        BlurIntensitySetting(settings.glassBlur) { value -> viewModel.appearance { it.copy(glassBlur = value) } }
+        Text("Glass surfaces are always on. Blur intensity applies to the covered screen behind the module menu and to dialog windows; it needs Android 12 or newer.",
+            style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.secondary)
         Text("Module navigation", style = MaterialTheme.typography.titleMedium)
         PreferenceToggle("Swipe and hold navigation", settings.modules, viewModel::moduleGestures)
         SettingStepper("Swipe activation distance", settings.distance, listOf(20, 28, 36, 48, 60), "dp") { value -> viewModel.appearance { it.copy(distance = value) } }
@@ -56,7 +74,7 @@ fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit) {
         DefaultRule()
         Text("Interface", style = MaterialTheme.typography.titleMedium)
         SettingStepper("Density", if (settings.compact) 0 else 1, listOf(0, 1), "", listOf("Compact", "Comfortable")) { value -> viewModel.appearance { it.copy(compact = value == 0) } }
-        SettingStepper("Accent color", settings.accent, listOf(0, 1, 2), "", listOf("Electric blue", "Ice blue", "Periwinkle")) { value -> viewModel.appearance { it.copy(accent = value) } }
+        SettingStepper("Accent color", settings.accent, listOf(0, 1, 2), "", listOf("Aurora blue", "Violet", "Teal")) { value -> viewModel.appearance { it.copy(accent = value) } }
         SettingStepper("Typography scale", settings.typeScale, listOf(85, 100, 115, 130), "%") { value -> viewModel.appearance { it.copy(typeScale = value) } }
         Text("Pull from the top of Chats to search. Fast swipes change an unlocked search scope; swipe and hold opens modules after release. Search is also available in the module menu.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         DefaultRule()
@@ -70,6 +88,25 @@ fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit) {
         Text("Telegram cloud chats are not end-to-end encrypted. Only supported Secret Chats offer Telegram's end-to-end encryption model.", style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
+
+/** Only publish a new discrete radius, not every fractional thumb position. */
+@Composable
+private fun BlurIntensitySetting(value: Int, onChange: (Int) -> Unit) {
+    var position by remember(value) { mutableFloatStateOf(value.toFloat()) }
+    Column(Modifier.fillMaxWidth().excludeModuleGestures(), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("Blur Intensity", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+            Text(listOf("Off", "Low", "Medium", "High")[value.coerceIn(0, 3)],
+                color = DefaultDesign.colors.secondary, style = MaterialTheme.typography.labelSmall)
+        }
+        Slider(value = position, onValueChange = { next ->
+            position = next
+            val level = next.roundToInt().coerceIn(0, 3)
+            if (level != value) onChange(level)
+        }, valueRange = 0f..3f, steps = 2, modifier = Modifier.fillMaxWidth())
+    }
+}
+
 
 @Composable
 fun PrivacyScreen(contacts: List<Chat>, viewModel: PreferencesViewModel) {
@@ -103,8 +140,8 @@ fun PreferenceToggle(title: String, selected: Boolean, onChange: (Boolean) -> Un
 fun PreferenceToggle(title: String, selected: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).excludeModuleGestures().toggleable(value = selected, enabled = enabled, role = Role.Switch, onValueChange = onChange), verticalAlignment = Alignment.CenterVertically) {
         Text(title, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-        Box(Modifier.width(30.dp).height(18.dp).background(if (selected) DefaultDesign.colors.accent else DefaultDesign.colors.raised, CircleShape).padding(3.dp)) {
-            Box(Modifier.size(12.dp).align(if (selected) Alignment.CenterEnd else Alignment.CenterStart).background(if (selected) Color.Black else DefaultDesign.colors.secondary, CircleShape))
+        Box(Modifier.width(30.dp).height(18.dp).background(if (selected) DefaultDesign.colors.accent else DefaultDesign.colors.raised, DefaultDesign.controlShape).padding(3.dp)) {
+            Box(Modifier.size(12.dp).align(if (selected) Alignment.CenterEnd else Alignment.CenterStart).background(if (selected) DefaultDesign.colors.onAccent else DefaultDesign.colors.secondary, DefaultDesign.avatarShape))
         }
     }
 }

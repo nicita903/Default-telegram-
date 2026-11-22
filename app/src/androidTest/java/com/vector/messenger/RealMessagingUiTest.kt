@@ -58,17 +58,19 @@ class RealMessagingUiTest {
     @After fun after() { if (::scope.isInitialized) compose.runOnUiThread { scope.cancel() } }
     private fun event(update: ChatUpdate) { compose.runOnUiThread { client.events.trySend(update) }; compose.waitForIdle() }
     @Test fun liveChatListContainsNoDemoAndLogoutRestoresAnExplicitDemoSource() {
-        compose.setContent { DefaultTheme(ThemeMode.Dark) { ChatsScreen(vm, {}) } }
+        compose.setContent { DefaultTheme { ChatsScreen(vm, {}) } }
         compose.waitUntil(5000) { compose.onAllNodesWithText("Telegram fixture").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Alex Morgan").assertDoesNotExist()
-        compose.onNodeWithText("New chat").assertIsDisplayed()
+        // ChatsScreen is rendered without the app header here, so the New chat control (now in the
+        // header) is covered by RedesignUiTest and AppearanceNavigationUiTest instead.
+        compose.onNodeWithText("Telegram fixture").assertIsDisplayed()
         compose.runOnUiThread { auth.state.value = AuthState(AuthStep.LoggingOut) }
         compose.waitUntil(5000) { compose.onAllNodesWithText("Alex Morgan").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithText("Telegram fixture").assertDoesNotExist()
     }
     @Test fun aDelayedSendResponseDoesNotEraseNewlyTypedText() {
         compose.runOnUiThread { client.sendGate = CompletableDeferred() }
-        compose.setContent { DefaultTheme(ThemeMode.Dark) { ConversationScreen(-100, vm) } }
+        compose.setContent { DefaultTheme { ConversationScreen(-100, vm) } }
         compose.waitUntil(5000) { compose.onAllNodesWithText("Remote fixture").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("message_composer").performTextInput("First fixture")
         compose.onNodeWithContentDescription("Send message").performClick()
@@ -79,7 +81,7 @@ class RealMessagingUiTest {
         compose.onNodeWithContentDescription("Sending message").assertIsDisplayed()
     }
     @Test fun textSendAndNativeDeliveryUpdatesDriveBubbleStateAndFailureRetry() {
-        compose.setContent { DefaultTheme(ThemeMode.Dark) { ConversationScreen(-100, vm) } }
+        compose.setContent { DefaultTheme { ConversationScreen(-100, vm) } }
         compose.waitUntil(5000) { compose.onAllNodesWithText("Remote fixture").fetchSemanticsNodes().isNotEmpty() }
         compose.onNodeWithTag("message_composer").performTextInput("Synthetic send")
         compose.onNodeWithContentDescription("Send message").performClick()
@@ -95,7 +97,7 @@ class RealMessagingUiTest {
         compose.runOnIdle { Assert.assertEquals(1, client.retryCount) }
     }
     @Test fun protectedMessagesDisableTextSelectionAndAuthChangeClearsTheComposer() {
-        compose.setContent { DefaultTheme(ThemeMode.Dark) { ConversationScreen(-100, vm) } }
+        compose.setContent { DefaultTheme { ConversationScreen(-100, vm) } }
         compose.waitUntil(5000) { compose.onAllNodesWithText("Remote fixture").fetchSemanticsNodes().isNotEmpty() }
         event(ChatUpdate.Protection(-100, true))
         compose.onNodeWithText("Remote fixture").performTouchInput { longClick() }

@@ -26,11 +26,9 @@ class PreferencesViewModel @Inject constructor(
     fun refreshGhost() = ghost.refresh()
     fun applyGhostPrivacy() = ghost.applyPrivacy()
     fun keepCurrentPrivacy() = ghost.useCurrentRules()
-    val theme = appearanceStore.theme
     val hidePreviews = savedState.getStateFlow("hidePreviews", true)
     val moduleGestures = appearance.map { it.modules }.stateIn(viewModelScope, SharingStarted.Eagerly, appearance.value.modules)
     fun moduleGestures(value: Boolean) { appearance { it.copy(modules = value) } }
-    fun theme(value: ThemeMode) { appearanceStore.theme(value.name) }
     fun hidePreviews(value: Boolean) { savedState["hidePreviews"] = value }
     fun updateGhost(id: Long, value: GhostPreferences) = ghost.update(id, value)
 }
