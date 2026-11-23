@@ -27,9 +27,10 @@ import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+    @javax.inject.Inject lateinit var sounds: com.vector.messenger.sound.DefaultSounds
     @javax.inject.Inject lateinit var notifications: com.vector.messenger.notifications.TelegramNotifications
-    override fun onStart() { super.onStart(); notifications.foreground = true }
-    override fun onStop() { notifications.foreground = false; super.onStop() }
+    override fun onStart() { super.onStart(); notifications.foreground = true; sounds.foreground(true) }
+    override fun onStop() { notifications.foreground = false; sounds.foreground(false); super.onStop() }
     private val chats: ChatsViewModel by viewModels()
     private val preferences: PreferencesViewModel by viewModels()
     private val authentication: AuthenticationViewModel by viewModels()
@@ -52,6 +53,9 @@ class MainActivity : ComponentActivity() {
         val account = authentication // Starts/restores the process-owned Telegram session asynchronously.
         setContent {
             val appearance by preferences.appearance.collectAsStateWithLifecycle()
+            val recording by voice.state.collectAsStateWithLifecycle()
+            SideEffect { sounds.recording(recording.phase in setOf(com.vector.core.audio.RecordingPhase.Starting, com.vector.core.audio.RecordingPhase.Recording,
+                com.vector.core.audio.RecordingPhase.Locked, com.vector.core.audio.RecordingPhase.Finishing)) }
             SideEffect {
                 // Aurora owns a single dark canvas; the system bars never switch to light icons.
                 WindowCompat.getInsetsController(window, window.decorView).apply {
@@ -69,7 +73,7 @@ class MainActivity : ComponentActivity() {
                 com.vector.messenger.feature.avatar.LocalAccountAction provides { accountOpen = true },
                 com.vector.messenger.feature.music.LocalMusicViewModel provides music) {
             DefaultTheme {
-                DefaultApp(chats, preferences, search, onAccount = { accountOpen = true }, notificationHost = notifications)
+                DefaultApp(chats, preferences, search, onAccount = { accountOpen = true }, notificationHost = notifications, soundHost = sounds)
                 com.vector.messenger.feature.audio.AudioLifecycle()
                 com.vector.messenger.feature.music.NowPlayingHost()
                 androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) { music.refresh() }

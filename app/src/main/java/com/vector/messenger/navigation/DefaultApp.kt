@@ -50,7 +50,7 @@ import androidx.core.view.WindowInsetsCompat
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search: SearchViewModel, onAccount: () -> Unit = {}, notificationHost: com.vector.messenger.notifications.TelegramNotifications? = null) {
+fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search: SearchViewModel, onAccount: () -> Unit = {}, notificationHost: com.vector.messenger.notifications.TelegramNotifications? = null, soundHost: com.vector.messenger.sound.DefaultSounds? = null) {
     val navigation = rememberVectorNavigationController()
     // Keep the six controllers above the active content: switching modules does not reset stacks.
     val controllers = AppModule.entries.associateWith { key(it) { rememberNavController() } }
@@ -107,6 +107,10 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
     // One dialog for the whole app: the header's New chat control and the chats list both just
     // flip this, so there is no second copy of the contact picker to keep in sync.
     var newMessage by remember { mutableStateOf(false) }
+    var soundedMenu by rememberSaveable { mutableStateOf(menu) }
+    var soundedModule by rememberSaveable { mutableStateOf(displayedModule.name) }
+    LaunchedEffect(menu) { if (menu && !soundedMenu) soundHost?.menu(); soundedMenu = menu }
+    LaunchedEffect(displayedModule) { if (soundedModule != displayedModule.name) soundHost?.module(); soundedModule = displayedModule.name }
     fun startConversation(id: Long) {
         newMessage = false
         chats.open(id)
@@ -116,6 +120,7 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
     val notificationDestination by (notificationHost?.destinationState ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsStateWithLifecycle()
     val notificationAccount by (notificationHost?.accountId ?: remember { kotlinx.coroutines.flow.MutableStateFlow(0L) }).collectAsStateWithLifecycle()
     SideEffect {
+        soundHost?.conversation(if (chatStatus.live && conversation && !profileOpen && !menu && !searchOwnsInput) entry?.arguments?.getLong("chatId") else null, chatStatus.session)
         notificationHost?.activeConversation = if (chatStatus.live && notificationAccount != 0L && conversation && !profileOpen && !menu && !searchOwnsInput)
             entry?.arguments?.getLong("chatId")?.let { com.vector.core.ConversationIdentity("telegram", notificationAccount.toString(), it.toString()) } else null
     }

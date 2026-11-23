@@ -96,7 +96,12 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
             listOf(Triple("messages_v1", "Messages", NotificationManager.IMPORTANCE_DEFAULT),
             Triple("groups_v1", "Groups", NotificationManager.IMPORTANCE_DEFAULT),
             Triple("mentions_v1", "Mentions and replies", NotificationManager.IMPORTANCE_HIGH)).forEach { (id, name, importance) ->
-            if (system.getNotificationChannel(id) == null) system.createNotificationChannel(NotificationChannel(id, name, importance).apply { lockscreenVisibility = Notification.VISIBILITY_PRIVATE })
+            if (system.getNotificationChannel(id) == null) system.createNotificationChannel(NotificationChannel(id, name, importance).apply {
+                lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+                // Existing channels are never modified. Stable resource name survives APK updates.
+                setSound(Uri.parse("android.resource://${context.packageName}/raw/default_notification"), android.media.AudioAttributes.Builder()
+                    .setUsage(android.media.AudioAttributes.USAGE_NOTIFICATION).setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION).build())
+            })
         }
           } catch (_: Exception) { diagnostic("Channel setup failed; message synchronization is unaffected") }
         }

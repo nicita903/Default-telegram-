@@ -15,7 +15,10 @@ class PreferencesViewModel @Inject constructor(
     private val savedState: SavedStateHandle,
     private val appearanceStore: AppearancePreferences,
     private val notificationStore: com.vector.messenger.notifications.NotificationPreferenceStore,
+    private val soundStore: com.vector.messenger.sound.SoundPreferences,
 ) : ViewModel() {
+    val sounds = soundStore.state
+    fun soundPreference(change: (com.vector.messenger.sound.SoundSettings) -> com.vector.messenger.sound.SoundSettings) = soundStore.update(change)
     val appearance = appearanceStore.state
     fun appearance(change: (AppearanceSettings) -> AppearanceSettings) = appearanceStore.update(change)
     val ghostPreferences = ghost.preferences

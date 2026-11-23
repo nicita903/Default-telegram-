@@ -36,6 +36,7 @@ import kotlin.math.roundToInt
 @Composable
 fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit) {
     val settings by viewModel.appearance.collectAsStateWithLifecycle()
+    val sounds by viewModel.sounds.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp).testTag("settings_scroll"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         com.vector.messenger.feature.avatar.AccountSummary()
         Text("Appearance", style = MaterialTheme.typography.titleMedium)
@@ -82,6 +83,22 @@ fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit) {
         DefaultAction("Ghost Mode", onPrivacy)
         DefaultRule()
         com.vector.messenger.notifications.NotificationSettings(viewModel)
+        DefaultRule()
+        Text("Sounds", style = MaterialTheme.typography.titleMedium)
+        PreferenceToggle("Message sounds", sounds.messages) { value -> viewModel.soundPreference { it.copy(messages = value) } }
+        PreferenceToggle("Send sound", sounds.send) { value -> viewModel.soundPreference { it.copy(send = value) } }
+        PreferenceToggle("Receive sound", sounds.receive) { value -> viewModel.soundPreference { it.copy(receive = value) } }
+        PreferenceToggle("Failed message sound", sounds.errors) { value -> viewModel.soundPreference { it.copy(errors = value) } }
+        PreferenceToggle("Interface sounds", sounds.interfaceSounds) { value -> viewModel.soundPreference { it.copy(interfaceSounds = value) } }
+        SettingStepper("Sound volume", sounds.volume, (0..100 step 5).toList(), "%") { value -> viewModel.soundPreference { it.copy(volume = value) } }
+        Text("In-app sounds stay quiet in silent mode, Do Not Disturb, calls, recording and music playback. Notification volume is controlled by Android.", style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.secondary)
+        val soundContext = androidx.compose.ui.platform.LocalContext.current
+        listOf("Messages" to "messages_v1", "Groups" to "groups_v1", "Mentions" to "mentions_v1").forEach { (name, channel) ->
+            DefaultAction("$name notification sound", {
+                soundContext.startActivity(android.content.Intent(android.provider.Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
+                    .putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, soundContext.packageName).putExtra(android.provider.Settings.EXTRA_CHANNEL_ID, channel))
+            })
+        }
         HorizontalDivider()
         Text("About DEFAULT", style = MaterialTheme.typography.titleMedium)
         Text("Default · 0.1.0\nAppearance preferences are stored on this device. Signed-in chats use Telegram; signed-out chats are a separate demonstration. Manage your session from Account.")

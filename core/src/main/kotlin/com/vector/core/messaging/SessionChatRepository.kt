@@ -22,6 +22,18 @@ class SessionChatRepository(
     override val history = historyState.asStateFlow()
     private val arrivalEvents = MutableSharedFlow<MessageArrival>(extraBufferCapacity = 128)
     override val arrivals = arrivalEvents.asSharedFlow()
+    private val feedbackEvents = MutableSharedFlow<ChatFeedback>(extraBufferCapacity = 64)
+    override val feedback = feedbackEvents.asSharedFlow()
+    private var confirmationSequence = 0L
+    private fun feedback(message: Message, kind: ChatFeedbackKind) {
+        feedbackEvents.tryEmit(ChatFeedback(epoch, message.chatId, "${kind.name}:${message.id}", kind, message.date))
+    }
+    private fun confirmation(chat: Long) {
+        feedbackEvents.tryEmit(ChatFeedback(epoch, chat, "confirmation:${++confirmationSequence}", ChatFeedbackKind.Confirmation))
+    }
+    private fun accepted(message: Message) {
+        if (message.delivery != Delivery.Failed) feedback(message, ChatFeedbackKind.Accepted)
+    }
     private val seenArrivals = linkedSetOf<Long>()
     private var viewportNearLatest = true
     private var viewportScrolling = false
@@ -175,7 +187,10 @@ class SessionChatRepository(
                     window.remove(old)
                 }
                 put(update.message); publishMessages()
+                if (update.message.delivery == Delivery.Failed) feedback(update.message, ChatFeedbackKind.Failed)
                 if (fresh) {
+                    if (!update.message.outgoing && !update.message.isService && client.connection.value == com.vector.core.profile.ProfileConnection.Ready)
+                        feedback(update.message, ChatFeedbackKind.Incoming)
                     seenArrivals += update.message.id
                     while (seenArrivals.size > WINDOW * 3) seenArrivals.remove(seenArrivals.first())
                     arrivalEvents.tryEmit(MessageArrival(epoch, update.message.chatId, update.message.id, update.message.outgoing,
@@ -295,7 +310,7 @@ class SessionChatRepository(
             val message = client.sendText(chatId, text, replyTo)
             currentCoroutineContext().ensureActive()
             if (!live || session != epoch) SendResult.MissingChat
-            else { put(message); publishMessages(); SendResult.Sent }
+            else { put(message); publishMessages(); accepted(message); SendResult.Sent }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { if ((failure as? MessagingException)?.failure == MessagingFailure.Network) SendResult.Uncertain else SendResult.Failed }
         finally { if (session == epoch) sends.remove(chatId) }
@@ -320,6 +335,7 @@ class SessionChatRepository(
                 currentCoroutineContext().ensureActive()
                 if (!live || session != epoch) return result(SendResult.MissingChat, accepted)
                 sent.forEach { put(it) }; publishMessages()
+                if (accepted == 0) sent.firstOrNull()?.let { this.accepted(it) }
                 accepted += batch.size
             }
             result(SendResult.Sent, accepted)
@@ -368,7 +384,7 @@ class SessionChatRepository(
             val message = client.editText(chatId, messageId, text)
             currentCoroutineContext().ensureActive()
             if (!live || session != epoch) SendResult.MissingChat
-            else { put(message); publishMessages(); SendResult.Sent }
+            else { put(message); publishMessages(); confirmation(chatId); SendResult.Sent }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { if ((failure as? MessagingException)?.failure == MessagingFailure.Forbidden) SendResult.Forbidden else SendResult.Failed }
         finally { if (session == epoch) sends.remove(chatId) }
@@ -384,7 +400,7 @@ class SessionChatRepository(
             val message = client.sendVoice(chatId, clip, replyTo)
             currentCoroutineContext().ensureActive()
             if (!live || session != epoch) SendResult.MissingChat
-            else { put(message); publishMessages(); SendResult.Sent }
+            else { put(message); publishMessages(); accepted(message); SendResult.Sent }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { if ((failure as? MessagingException)?.failure == MessagingFailure.Network) SendResult.Uncertain else SendResult.Failed }
         finally { if (session == epoch) sends.remove(chatId) }
@@ -393,7 +409,7 @@ class SessionChatRepository(
         val message = window[messageId] ?: return
         if (!live || !message.canRetry || message.delivery != Delivery.Failed || message.retryAt > System.currentTimeMillis() || !retries.add(messageId)) return
         sessionScope?.launch {
-            try { val result = client.resend(chatId, messageId); ensureActive(); result.forEach { put(it) }; publishMessages() }
+            try { val result = client.resend(chatId, messageId); ensureActive(); result.forEach { put(it) }; publishMessages(); result.firstOrNull()?.let { accepted(it) } }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { historyState.update { it.copy(error = "Unable to retry this message. Try again later.") } }
             finally { retries.remove(messageId) }
@@ -453,7 +469,7 @@ class SessionChatRepository(
         // Read the currently visible list flags, which are derived from TDLib positions.
         val visible = chats.value.find { it.id == id } ?: return
         sessionScope?.launch {
-            try { block(record.copy(chat = visible)) }
+            try { block(record.copy(chat = visible)); confirmation(id) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { statusState.update { it.copy(error = "Telegram could not update this chat.") } }
         }

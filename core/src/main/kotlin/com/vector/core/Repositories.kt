@@ -16,6 +16,7 @@ interface ChatRepository {
     fun togglePin(chatId: Long)
     val status: StateFlow<ChatStatus> get() = DefaultChatState.status
     val history: StateFlow<HistoryState> get() = DefaultChatState.history
+    val feedback: kotlinx.coroutines.flow.Flow<ChatFeedback> get() = kotlinx.coroutines.flow.emptyFlow()
     val arrivals: kotlinx.coroutines.flow.Flow<MessageArrival> get() = kotlinx.coroutines.flow.emptyFlow()
     fun reportViewport(chatId: Long, nearLatest: Boolean, scrolling: Boolean) {}
     val reactionError: StateFlow<String?> get() = DefaultChatState.reactionError
