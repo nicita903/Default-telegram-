@@ -144,7 +144,10 @@ class PhotoUploadStore @Inject constructor(@ApplicationContext private val conte
     suspend fun saveAvatar(path: String, destination: String) = withContext(Dispatchers.IO) {
         val source = File(path).canonicalFile
         val root = File(context.noBackupFilesDir, "telegram/files").canonicalFile.toPath()
-        require(source.isFile && source.toPath().startsWith(root))
+        val database = File(context.noBackupFilesDir, "telegram/database")
+        val avatarRoots = listOf(root, File(database, "profile_photos").canonicalFile.toPath(),
+            File(database, "thumbnails").canonicalFile.toPath())
+        require(source.isFile && source.canRead() && source.length() > 0 && avatarRoots.any { source.toPath().startsWith(it) })
         context.contentResolver.openOutputStream(Uri.parse(destination), "w")?.use { output ->
             source.inputStream().use { input ->
                 val buffer = ByteArray(64 * 1024)

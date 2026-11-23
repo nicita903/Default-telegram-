@@ -40,8 +40,10 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
     private val mediaEvents = MutableSharedFlow<JSONObject>(extraBufferCapacity = 64)
     internal val mediaUpdates = mediaEvents.asSharedFlow()
     private val avatarTypes = setOf("updateUser", "updateChatPhoto", "updateFile")
-    private val avatarEvents = MutableSharedFlow<JSONObject>(extraBufferCapacity = 64)
+    private class AvatarEnvelope(val epoch: Long, val value: JSONObject)
+    private val avatarEvents = MutableSharedFlow<AvatarEnvelope>(extraBufferCapacity = 64)
     internal val avatarUpdates = avatarEvents.asSharedFlow()
+        .filter { it.epoch == sessionEpoch && authorized }.map { it.value }
     private val mediaTypes = setOf("updateFile", "updateFileAddedToDownloads", "updateFileDownload", "updateFileRemovedFromDownloads")
     private val actionTargets = ConcurrentHashMap<Long, Long>()
     @Volatile private var actionPolicy: (Long, String) -> Boolean = { _, action -> action == "chatActionCancel" }
@@ -114,13 +116,13 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                             }
                             "updateFile" -> json.optJSONObject("file")?.let { file ->
                                 if (authorized && selfPhotoId != 0 && file.optInt("id") == selfPhotoId)
-                                    mapProfileFile(file, files)?.let { profileEvents.emit(ProfileUpdate.Photo(it)) }
+                                    mapProfileFile(file, files, database)?.let { profileEvents.emit(ProfileUpdate.Photo(it)) }
                             }
                             "updateConnectionState" -> connectionState.value = mapProfileConnection(json.optJSONObject("state") ?: JSONObject())
                         }
                         if (authorized && json.optString("@type") in messagingTypes) messagingEvents.send(MessagingEnvelope(sessionEpoch, json))
                         if (authorized && json.optString("@type") in mediaTypes) mediaEvents.emit(json)
-                        if (authorized && json.optString("@type") in avatarTypes) avatarEvents.emit(json)
+                        if (authorized && json.optString("@type") in avatarTypes) avatarEvents.emit(AvatarEnvelope(sessionEpoch, json))
                         if (authorized && (json.optString("@type") == "updateUserPrivacySettingRules" || json.optString("@type") == "updateUser")) ghostEvents.emit(json)
                         if (json.optString("@type") != "updateAuthorizationState") continue
                         val auth = json.getJSONObject("authorization_state")
@@ -191,19 +193,19 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
 
     private suspend fun publishCurrentUser(json: JSONObject) {
         // A malformed optional profile must never terminate the authentication receive loop.
-        val profile = try { mapProfile(json, files) } catch (_: Exception) { return }
+        val profile = try { mapProfile(json, files, database) } catch (_: Exception) { return }
         selfId = profile.id; selfPhotoId = profile.photo?.fileId ?: 0; profileRevision++
         profileEvents.emit(ProfileUpdate.CurrentUser(profile))
     }
 
     override suspend fun getMe(): TelegramProfile = profileRequest {
-        mapProfile(checkedProfileRequest(request("getMe")), files)
+        mapProfile(checkedProfileRequest(request("getMe")), files, database)
     }
 
     override suspend fun downloadPhoto(fileId: Int): ProfilePhoto = profileRequest {
         require(fileId > 0)
         mapProfileFile(checkedProfileRequest(request("downloadFile", "file_id" to fileId, "priority" to 1,
-            "offset" to 0, "limit" to 0, "synchronous" to false)), files)
+            "offset" to 0, "limit" to 0, "synchronous" to false)), files, database)
             ?: throw ProfileRequestException(ProfileFailure.Unavailable)
     }
 
@@ -223,7 +225,7 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
         if (epoch != sessionEpoch || !authorized) throw com.vector.core.messaging.MessagingException(com.vector.core.messaging.MessagingFailure.Unavailable)
         result
     }
-    internal fun messagingPhoto(file: JSONObject) = mapProfileFile(file, files)
+    internal fun messagingPhoto(file: JSONObject) = mapProfileFile(file, files, database)
 
     private val messagingTypes = setOf("updateNewChat", "updateChatPosition", "updateChatDraftMessage", "updateChatLastMessage", "updateChatTitle", "updateChatPhoto",
         "updateChatReadInbox", "updateChatReadOutbox", "updateChatPermissions", "updateChatHasProtectedContent", "updateNewMessage",

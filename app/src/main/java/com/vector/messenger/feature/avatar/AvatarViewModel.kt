@@ -44,6 +44,7 @@ class AvatarViewModel @Inject constructor(auth: AuthenticationRepository, privat
     private var scope: CoroutineScope? = null
     private val identities = linkedMapOf<AvatarOwner, AvatarIdentity>()
     private val files = linkedMapOf<Int, ProfilePhoto>()
+    private val fileRevisions = mutableMapOf<Int, Long>()
     private val resolving = mutableSetOf<AvatarOwner>()
     private val resolved = mutableSetOf<AvatarOwner>()
     private val identityRevisions = mutableMapOf<AvatarOwner, Long>()
@@ -58,12 +59,20 @@ class AvatarViewModel @Inject constructor(auth: AuthenticationRepository, privat
     init {
         viewModelScope.launch {
             auth.state.map { it.step == AuthStep.Ready }.distinctUntilChanged().collectLatest { ready ->
-                identities.clear(); files.clear(); resolving.clear(); resolved.clear(); identityRevisions.clear(); downloads.clear(); retryAt.clear(); decodeFailures.clear(); viewerToken++
+                identities.clear(); files.clear(); fileRevisions.clear(); resolving.clear(); resolved.clear(); identityRevisions.clear(); downloads.clear(); retryAt.clear(); decodeFailures.clear(); viewerToken++
                 viewing.value = null; editing.value = AvatarEditState(); uploadFile = 0; uploadPath = null; MediaImages.clear()
                 memberState.value = AvatarMembersState()
                 mutable.value = AvatarCache(ready, mutable.value.session + 1)
                 if (ready) coroutineScope {
                     scope = this
+                    launch {
+                        client.connection.collect { connection ->
+                            if (connection == ProfileConnection.Ready) {
+                                identities.keys.toList().filter { it !in resolved }.forEach(::resolve)
+                                identities.values.mapNotNull { it.small?.fileId }.distinct().forEach { download(it, force = true) }
+                            }
+                        }
+                    }
                     try {
                         client.updates.collect { json ->
                             when (json.optString("@type")) {
@@ -102,7 +111,7 @@ class AvatarViewModel @Inject constructor(auth: AuthenticationRepository, privat
         while (identities.size > 2048) {
             val owner = identities.keys.first(); identities.remove(owner); resolved.remove(owner); identityRevisions.remove(owner)
         }
-        while (files.size > 2048) files.remove(files.keys.first())
+        while (files.size > 2048) { val id = files.keys.first(); files.remove(id); fileRevisions.remove(id) }
         mutable.update { it.copy(identities = identities.toMap(), files = files.toMap()) }
     }
     private fun picture(identity: AvatarIdentity): List<AvatarPicture> = identity.big?.let { listOf(AvatarPicture(identity.photoId, identity.small, it)) }.orEmpty()
@@ -126,15 +135,23 @@ class AvatarViewModel @Inject constructor(auth: AuthenticationRepository, privat
         if (owner !in identities) {
             if (small != null) accept(AvatarIdentity(owner, name, small), false)
         }
+        // A completed profile/chat model can arrive after metadata resolution or while this
+        // screen was stopped. Merge only the same current file ID; never resurrect a removed photo.
+        if (small?.localPath != null && identities[owner]?.small?.fileId == small.fileId && files[small.fileId] != small) {
+            files[small.fileId] = small
+            fileRevisions[small.fileId] = (fileRevisions[small.fileId] ?: 0) + 1
+            downloads.remove(small.fileId); retryAt.remove(small.fileId); publish()
+        }
         if (owner !in resolved) resolve(owner)
         val identity = identities[owner]
         val target = if (identity != null) identity.small else small
         target?.takeUnless { it.fileId == ownProfile.value.profile?.photo?.fileId }?.let { download(it.fileId) }
     }
     private fun resolve(owner: AvatarOwner) {
+        val sessionScope = scope ?: return
         if (!resolving.add(owner)) return
         val revision = identityRevisions[owner]
-        scope?.launch {
+        sessionScope.launch {
             try { val identity = client.identity(owner); ensureActive(); resolved += owner; if (identityRevisions[owner] == revision) accept(identity) }
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { /* Retain initials and allow a viewer refresh to retry. */ }
@@ -146,9 +163,13 @@ class AvatarViewModel @Inject constructor(auth: AuthenticationRepository, privat
         val photo = if (!current.authenticated) null else if (identity != null) identity.small else fallback
         AvatarDisplay(current.session, identity?.name?.ifBlank { name } ?: name, photo?.let { current.files[it.fileId] ?: it })
     }.distinctUntilChanged()
-    private suspend fun applyFile(json: JSONObject) {
+    private suspend fun applyFile(json: JSONObject, expectedRevision: Long? = null) {
         if (uploadPath != null && json.optJSONObject("local")?.optString("path") == uploadPath) uploadFile = json.optInt("id")
         val photo = withContext(Dispatchers.IO) { client.file(json) } ?: return
+        // downloadFile returns an initial snapshot. A newer updateFile may already have completed
+        // the download while this response was being mapped off Main; it must win.
+        if (expectedRevision != null && (fileRevisions[photo.fileId] ?: 0) != expectedRevision) return
+        fileRevisions[photo.fileId] = (fileRevisions[photo.fileId] ?: 0) + 1
         files.remove(photo.fileId); files[photo.fileId] = photo
         val active = json.optJSONObject("local")?.optBoolean("is_downloading_active") == true
         if (!active) {
@@ -163,13 +184,20 @@ class AvatarViewModel @Inject constructor(auth: AuthenticationRepository, privat
         publish()
     }
     fun download(id: Int, force: Boolean = false) {
-        if (!state.value.authenticated || id <= 0 || (!force && files[id]?.localPath != null) || id in downloads ||
+        if (!state.value.authenticated || id <= 0 || files[id]?.localPath != null || id in downloads ||
             (!force && (retryAt[id] ?: 0) > SystemClock.elapsedRealtime())) return
+        val sessionScope = scope ?: return
         downloads += id
-        scope?.launch {
-            try { applyFile(client.download(id)) }
+        val revision = fileRevisions[id] ?: 0
+        AvatarDiagnostics.record(AvatarStage.DownloadRequested)
+        sessionScope.launch {
+            try {
+                val result = client.download(id)
+                AvatarDiagnostics.record(AvatarStage.DownloadAccepted)
+                applyFile(result, expectedRevision = revision)
+            }
             catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { downloads.remove(id); retryAt[id] = SystemClock.elapsedRealtime() + 30_000 }
+            catch (_: Exception) { AvatarDiagnostics.record(AvatarStage.DownloadFailed); downloads.remove(id); retryAt[id] = SystemClock.elapsedRealtime() + 30_000 }
         }
     }
     fun missingFile(id: Int) {

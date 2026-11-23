@@ -17,6 +17,8 @@ import com.vector.messenger.feature.media.MediaImages
 import com.vector.messenger.feature.media.DecodedMediaImage
 import com.vector.messenger.navigation.gesture.excludeModuleGestures
 import com.vector.messenger.telegram.AvatarOwner
+import com.vector.messenger.telegram.AvatarDiagnostics
+import com.vector.messenger.telegram.AvatarStage
 import kotlinx.coroutines.flow.flowOf
 
 /** One session-aware, sampled image cache for every avatar and media thumbnail. */
@@ -34,8 +36,12 @@ fun TelegramAvatar(name: String, photo: ProfilePhoto?, size: Dp, id: Long = 0, u
         val path = display.photo?.localPath
         val bitmap by produceState<DecodedMediaImage?>(null, path) {
             value = path?.let { MediaImages.load(it, 256, display.session) }
-            if (path != null && value == null) display.photo?.let { avatars?.missingFile(it.fileId) }
-            else if (value != null) display.photo?.let { avatars?.decoded(it.fileId) }
+            if (path != null && value == null) display.photo?.let {
+                AvatarDiagnostics.record(AvatarStage.DecodeFailed); avatars?.missingFile(it.fileId)
+            }
+            else if (value != null) display.photo?.let {
+                AvatarDiagnostics.record(AvatarStage.DecodeReady); avatars?.decoded(it.fileId)
+            }
         }
         val interactive = avatars != null && id != 0L && avatars.state.value.authenticated
         Box(Modifier.size(size).clip(DefaultDesign.avatarShape)

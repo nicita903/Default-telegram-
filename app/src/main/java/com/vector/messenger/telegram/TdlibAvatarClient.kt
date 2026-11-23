@@ -18,6 +18,7 @@ data class AvatarMemberPage(val members: List<AvatarIdentity>, val offset: Int, 
 /** Adapter over the one authenticated JSON client; never consumes the chat repository's channel. */
 class TdlibAvatarClient @Inject constructor(private val manager: TdlibClientManager) {
     val updates = manager.avatarUpdates
+    val connection = manager.connection
     suspend fun call(value: JSONObject): JSONObject {
         val result = manager.messagingRequest(value)
         if (result.optString("@type") == "error") throw com.vector.core.messaging.MessagingException(
@@ -29,6 +30,7 @@ class TdlibAvatarClient @Inject constructor(private val manager: TdlibClientMana
     fun user(json: JSONObject): AvatarIdentity {
         val owner = AvatarOwner(json.optLong("id"))
         val photo = json.optJSONObject("profile_photo")
+        AvatarDiagnostics.record(if (photo == null) AvatarStage.MetadataAbsent else AvatarStage.MetadataPresent)
         val blocked = restricted(json)
         val active = json.optJSONObject("usernames")?.optJSONArray("active_usernames")
         return AvatarIdentity(owner, listOf(json.safeText("first_name"), json.safeText("last_name")).filter(String::isNotBlank).joinToString(" "),
@@ -44,6 +46,7 @@ class TdlibAvatarClient @Inject constructor(private val manager: TdlibClientMana
             return user.copy(owner = owner, name = chat.safeText("title"), canSave = user.canSave && !chat.optBoolean("has_protected_content"))
         }
         val photo = chat.optJSONObject("photo")
+        AvatarDiagnostics.record(if (photo == null) AvatarStage.MetadataAbsent else AvatarStage.MetadataPresent)
         return AvatarIdentity(owner, chat.safeText("title"), photo?.optJSONObject("small")?.let(::file), photo?.optJSONObject("big")?.let(::file),
             canSave = !chat.optBoolean("has_protected_content") && !restricted(chat))
     }
