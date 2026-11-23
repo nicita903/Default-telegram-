@@ -31,7 +31,7 @@ internal fun AccountProfileContent(state: ProfileState, refresh: () -> Unit) {
         } else {
             if (profile != null) {
                 Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                    ProfileAvatar(profile)
+                    TelegramAvatar(profile.displayName, profile.photo, 72.dp, profile.id, user = true)
                     Column(Modifier.weight(1f)) {
                         Text(profile.displayName, style = MaterialTheme.typography.titleLarge, color = colors.text)
                         Text(profile.username?.let { "@$it" } ?: "No username", style = MaterialTheme.typography.bodySmall, color = colors.secondary)
@@ -68,27 +68,3 @@ private fun ProfileField(label: String, value: String) {
     }
 }
 
-@Composable
-private fun ProfileAvatar(profile: TelegramProfile) {
-    val path = profile.photo?.localPath
-    key(profile.id, profile.photo?.fileId, path) {
-        // A new identity/photo gets a new producer, so no previous bitmap survives for a frame.
-        // Decode only the small TDLib image, off Main, with bounded dimensions. No external URL/cache.
-        val bitmap by produceState<ImageBitmap?>(null) {
-            value = withContext(Dispatchers.IO) {
-                if (path == null) null else try {
-                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                    BitmapFactory.decodeFile(path, bounds)
-                    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) null else {
-                        var sample = 1
-                        while (bounds.outWidth / sample > 256 || bounds.outHeight / sample > 256) sample *= 2
-                        BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample })?.asImageBitmap()
-                    }
-                } catch (_: Exception) { null }
-            }
-        }
-        if (bitmap == null) ChatAvatar(profile.displayName, 64.dp)
-        else Image(bitmap!!, "Telegram profile picture", Modifier.size(64.dp).clip(DefaultDesign.avatarShape)
-, contentScale = ContentScale.Crop)
-    }
-}

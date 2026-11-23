@@ -9,6 +9,8 @@ data class Chat(
     val canSend: Boolean = true, val protectedContent: Boolean = false,
     val order: Long = 0,
     val canSendPhotos: Boolean = canSend,
+    val canSendDocuments: Boolean = canSend,
+    val userId: Long? = null,
 ) { override fun toString() = "Chat([redacted])" }
 enum class ChatKind { Contact, Group, Channel }
 enum class Delivery { Received, LocalDemo, Sending, Sent, Read, Failed }

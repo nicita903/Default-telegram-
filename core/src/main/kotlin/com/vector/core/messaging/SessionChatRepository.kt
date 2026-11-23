@@ -93,7 +93,7 @@ class SessionChatRepository(
     }
     private fun projected(record: TelegramChat): Chat {
         val rule = access[record.peerId to record.supergroup]
-        return if (rule?.restricted == true) record.chat.copy(preview = "Content unavailable", canSend = false, canSendPhotos = false, protectedContent = true, photo = null)
+        return if (rule?.restricted == true) record.chat.copy(preview = "Content unavailable", canSend = false, canSendPhotos = false, canSendDocuments = false, protectedContent = true, photo = null)
         else record.chat.copy(canSend = rule?.canSendOverride ?: record.chat.canSend,
             canSendPhotos = rule?.canSendPhotosOverride ?: record.chat.canSendPhotos)
     }
@@ -135,7 +135,7 @@ class SessionChatRepository(
             is ChatUpdate.Title -> change(update.id) { it.copy(chat = it.chat.copy(title = update.title)) }
             is ChatUpdate.Photo -> change(update.id) { it.copy(chat = it.chat.copy(photo = update.photo)) }
             is ChatUpdate.Unread -> change(update.id) { it.copy(chat = it.chat.copy(unread = update.count)) }
-            is ChatUpdate.Permissions -> change(update.id) { it.copy(chat = it.chat.copy(canSend = update.canSend, canSendPhotos = update.canSendPhotos)) }
+            is ChatUpdate.Permissions -> change(update.id) { it.copy(chat = it.chat.copy(canSend = update.canSend, canSendPhotos = update.canSendPhotos, canSendDocuments = update.canSendDocuments)) }
             is ChatUpdate.Protection -> change(update.id) { it.copy(chat = it.chat.copy(protectedContent = update.protected)) }
             is ChatUpdate.ReadOutbox -> {
                 change(update.id) { it.copy(lastReadOutbox = update.lastId) }
@@ -150,7 +150,13 @@ class SessionChatRepository(
             }
             is ChatUpdate.Content -> {
                 if (records[update.chatId]?.let { it.lastMessageId == update.messageId && !it.lastRestricted } == true)
-                    change(update.chatId) { it.copy(chat = it.chat.copy(preview = update.text.ifEmpty { if (update.media?.kind == com.vector.core.media.MediaKind.Photo) "Photo" else "" })) }
+                    change(update.chatId) { it.copy(chat = it.chat.copy(preview = update.text.ifEmpty {
+                        when (update.media?.kind) {
+                            com.vector.core.media.MediaKind.Photo -> "Photo"
+                            com.vector.core.media.MediaKind.Document -> update.media.name
+                            else -> ""
+                        }
+                    })) }
                 if (active == update.chatId) {
                     revision++; versions[update.messageId] = revision
                     window[update.messageId]?.takeUnless { it.restricted }?.let { window[update.messageId] = it.copy(text = update.text, media = update.media) }; publishMessages()
@@ -208,8 +214,9 @@ class SessionChatRepository(
         sessionScope?.launch {
             try {
                 val allowed = client.photoPermission(chatId)
+                val documents = client.photoPermission(chatId, true)
                 ensureActive()
-                if (active == chatId) change(chatId) { it.copy(chat = it.chat.copy(canSendPhotos = allowed)) }
+                if (active == chatId) change(chatId) { it.copy(chat = it.chat.copy(canSendPhotos = allowed, canSendDocuments = documents)) }
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { /* Keep the last confirmed permission; TDLib rechecks on send. */ }
         }
@@ -262,15 +269,16 @@ class SessionChatRepository(
     override suspend fun sendPhotos(chatId: Long, photos: List<com.vector.core.media.UploadPhoto>, caption: String, album: Boolean, replyTo: Long?): com.vector.core.media.PhotoSendResult {
         fun result(value: SendResult, count: Int = 0) = com.vector.core.media.PhotoSendResult(count, value)
         if (!live) return result(SendResult.Unsupported)
-        if (photos.size !in 1..10 || photos.any { it.width <= 0 || it.height <= 0 || it.path.isBlank() }) return result(SendResult.Empty)
+        if (photos.size !in 1..100 || photos.any { (!it.document && (it.width <= 0 || it.height <= 0)) || it.path.isBlank() } ||
+            photos.any { it.document != photos.first().document }) return result(SendResult.Empty)
         if (caption.length > 1024) return result(SendResult.TooLong)
         if (records[chatId] == null) return result(SendResult.MissingChat)
         if (!sends.add(chatId)) return result(SendResult.Failed)
         val session = epoch
         var accepted = 0
         return try {
-            if (!client.photoPermission(chatId)) return result(SendResult.Forbidden)
-            val batches = if (album) listOf(photos) else photos.map { listOf(it) }
+            if (!client.photoPermission(chatId, photos.first().document)) return result(SendResult.Forbidden)
+            val batches = if (album && !photos.first().document) photos.chunked(10) else photos.map { listOf(it) }
             for (batch in batches) {
                 currentCoroutineContext().ensureActive()
                 if (!live || session != epoch) return result(SendResult.MissingChat, accepted)
@@ -291,7 +299,7 @@ class SessionChatRepository(
     }
     override fun cancelPhotoSend(chatId: Long, messageId: Long) {
         val message = window[messageId]?.takeIf { it.chatId == chatId } ?: return
-        if (message.media?.kind != com.vector.core.media.MediaKind.Photo || message.delivery !in listOf(Delivery.Sending, Delivery.Failed)) return
+        if (message.media?.kind !in listOf(com.vector.core.media.MediaKind.Photo, com.vector.core.media.MediaKind.Document) || message.delivery !in listOf(Delivery.Sending, Delivery.Failed)) return
         val key = chatId to messageId
         if (!photoCancellations.add(key)) return
         val session = epoch

@@ -38,7 +38,8 @@ fun MediaAttachmentView(item: MediaItem, viewModel: MediaViewModel, onOpen: () -
         .collectAsStateWithLifecycle(initialValue = MediaPresentation())
     val file = state.file
     val thumb = item.media.thumbnail
-    val preview = file?.takeIf { item.media.kind == MediaKind.Photo && it.complete && it.path != null }
+    val imageDocument = item.media.isImageDocument()
+    val preview = file?.takeIf { (item.media.kind == MediaKind.Photo || imageDocument) && it.complete && it.path != null }
         ?: state.thumbnail?.takeIf { it.complete && it.path != null }
     LaunchedEffect(state.session, item.media.file.id, thumb?.id, item.media.file.complete) {
         if (thumb != null) viewModel.preview(item.copy(media = item.media.copy(file = thumb, thumbnail = null)))
@@ -48,10 +49,15 @@ fun MediaAttachmentView(item: MediaItem, viewModel: MediaViewModel, onOpen: () -
     val image by produceState<DecodedMediaImage?>(null, preview?.path, state.session) {
         value = preview?.path?.let { MediaImages.load(it, 512, state.session) }
     }
-    if (item.media.kind == MediaKind.Photo) {
+    if (item.media.kind == MediaKind.Photo || imageDocument) {
         val transfer = file ?: item.media.file.copy(path = null)
+        Column {
+        if (imageDocument) {
+            Text(item.media.name, maxLines = 1, color = DefaultDesign.colors.text, style = MaterialTheme.typography.bodyMedium)
+            Text("${fileSize(transfer.size)} · Original file", color = DefaultDesign.colors.secondary, style = MaterialTheme.typography.labelSmall)
+        }
         BoxWithConstraints(Modifier.widthIn(max = 260.dp)) {
-            val ratio = if (item.media.width > 0 && item.media.height > 0) item.media.width.toFloat() / item.media.height else 1f
+            val ratio = if (item.media.width > 0 && item.media.height > 0) item.media.width.toFloat() / item.media.height else image?.let { it.width.toFloat() / it.height } ?: 1f
             val width = minOf(maxWidth, 260.dp * ratio).coerceAtLeast(minOf(maxWidth, 80.dp))
             val height = (width / ratio).coerceIn(64.dp, 260.dp)
             Box(Modifier.size(width, height).clip(RoundedCornerShape(12.dp)).background(DefaultDesign.colors.raised)
@@ -82,6 +88,7 @@ fun MediaAttachmentView(item: MediaItem, viewModel: MediaViewModel, onOpen: () -
                     LinearProgressIndicator(progress = { file.progress }, Modifier.align(Alignment.BottomCenter).fillMaxWidth(), color = DefaultDesign.colors.accent)
                 }
             }
+        }
         }
         return
     }

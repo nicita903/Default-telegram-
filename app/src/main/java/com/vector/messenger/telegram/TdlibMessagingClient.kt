@@ -70,10 +70,11 @@ class TdlibMessagingClient(private val manager: TdlibClientManager) : TelegramMe
                 "text" to request("formattedText", "text" to text, "entities" to JSONArray()),
                 "link_preview_options" to null, "clear_draft" to false))))
     }
-    override suspend fun photoPermission(chatId: Long): Boolean {
+    override suspend fun photoPermission(chatId: Long, document: Boolean): Boolean {
         val chat = call(request("getChat", "chat_id" to chatId))
         val type = chat.optJSONObject("type") ?: return false
-        val allowed = chat.optJSONObject("permissions")?.optBoolean("can_send_photos") == true
+        val permission = if (document) "can_send_documents" else "can_send_photos"
+        val allowed = chat.optJSONObject("permissions")?.optBoolean(permission) == true
         val group = when (type.optString("@type")) {
             "chatTypeBasicGroup" -> call(request("getBasicGroup", "basic_group_id" to type.optLong("basic_group_id")))
             "chatTypeSupergroup" -> call(request("getSupergroup", "supergroup_id" to type.optLong("supergroup_id")))
@@ -84,14 +85,18 @@ class TdlibMessagingClient(private val manager: TdlibClientManager) : TelegramMe
         return when (status.optString("@type")) {
             "chatMemberStatusCreator" -> true
             "chatMemberStatusAdministrator" -> !group.optBoolean("is_channel") || status.optJSONObject("rights")?.optBoolean("can_post_messages") == true
-            "chatMemberStatusRestricted" -> status.optBoolean("is_member") && status.optJSONObject("permissions")?.optBoolean("can_send_photos") == true
+            "chatMemberStatusRestricted" -> status.optBoolean("is_member") && status.optJSONObject("permissions")?.optBoolean(permission) == true
             "chatMemberStatusMember" -> allowed
             else -> false
         }
     }
     override suspend fun sendPhotos(chatId: Long, photos: List<com.vector.core.media.UploadPhoto>, caption: String, replyTo: Long?): List<com.vector.core.Message> {
         require(photos.size in 1..10)
-        val contents = photos.mapIndexed { index, photo -> request("inputMessagePhoto",
+        require(photos.none { it.document } || (photos.size == 1 && photos.single().document))
+        val contents = photos.mapIndexed { index, photo -> if (photo.document) request("inputMessageDocument",
+            "document" to request("inputDocument", "document" to request("inputFileLocal", "path" to photo.path),
+                "thumbnail" to null, "disable_content_type_detection" to true),
+            "caption" to request("formattedText", "text" to caption, "entities" to JSONArray())) else request("inputMessagePhoto",
             "photo" to request("inputPhoto", "photo" to request("inputFileLocal", "path" to photo.path),
                 "thumbnail" to null, "video" to null, "added_sticker_file_ids" to JSONArray(), "width" to photo.width, "height" to photo.height),
             "caption" to request("formattedText", "text" to if (index == 0) caption else "", "entities" to JSONArray()),
@@ -109,7 +114,7 @@ class TdlibMessagingClient(private val manager: TdlibClientManager) : TelegramMe
     }
     override suspend fun cancelPhotoSend(chatId: Long, messageId: Long) {
         val message = call(request("getMessage", "chat_id" to chatId, "message_id" to messageId))
-        if (message.optJSONObject("content")?.optString("@type") != "messagePhoto" ||
+        if (message.optJSONObject("content")?.optString("@type") !in setOf("messagePhoto", "messageDocument") ||
             message.optJSONObject("sending_state")?.optString("@type") !in setOf("messageSendingStatePending", "messageSendingStateFailed"))
             throw MessagingException(MessagingFailure.Forbidden)
         // Only the temporary sending ID is deleted. Never resolve it to a delivered replacement.

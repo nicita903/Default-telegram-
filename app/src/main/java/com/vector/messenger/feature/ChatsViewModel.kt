@@ -14,7 +14,9 @@ import com.vector.core.media.*
 import com.vector.messenger.feature.media.PhotoUploadStore
 
 @HiltViewModel
-class ChatsViewModel @Inject constructor(private val repository: ChatRepository, private val photoStore: PhotoUploadStore? = null) : ViewModel() {
+class ChatsViewModel @Inject constructor(private val repository: ChatRepository, private val photoStore: PhotoUploadStore? = null,
+    val photoGallery: com.vector.messenger.feature.media.LocalPhotoGallery? = null) : ViewModel() {
+    internal val messageStatusTransitions = MessageStatusTransitions()
     val chats = repository.chats
     val messages = repository.messages
     val status = repository.status
@@ -43,12 +45,12 @@ class ChatsViewModel @Inject constructor(private val repository: ChatRepository,
     fun clearPhotoError() { photoErrorState.value = null }
     fun releasePhotoSelection(uris: List<String>) { viewModelScope.launch { photoStore?.release(uris) } }
     fun cancelPhotoSend(chatId: Long, messageId: Long) = repository.cancelPhotoSend(chatId, messageId)
-    suspend fun photoPreview(uri: String) = photoStore?.preview(uri, status.value.session)
-    fun sendPhotos(chatId: Long, uris: List<String>, caption: String, album: Boolean, replyTo: Long?, onResult: (PhotoSendResult) -> Unit) {
+    suspend fun photoPreview(uri: String, edge: Int = 512) = photoStore?.preview(uri, status.value.session, edge)
+    fun sendPhotos(chatId: Long, uris: List<String>, caption: String, album: Boolean, replyTo: Long?, quality: PhotoQuality = PhotoQuality.STANDARD, onResult: (PhotoSendResult) -> Unit) {
         if (chatId in pending.value) return
         val store = photoStore ?: return
         if (caption.length > 1024) { photoErrorState.value = "Use a caption of 1,024 characters or fewer."; return }
-        if (uris.size !in 1..10 || !status.value.live) { photoErrorState.value = "Select up to 10 photos in a signed-in Telegram conversation."; return }
+        if (uris.size !in 1..100 || !status.value.live) { photoErrorState.value = "Select up to 100 images in a signed-in Telegram conversation."; return }
         val session = status.value.session
         pending.value += chatId
         photoErrorState.value = null
@@ -58,7 +60,7 @@ class ChatsViewModel @Inject constructor(private val repository: ChatRepository,
             try {
                 for (uri in uris) {
                     if (status.value.session != session || !status.value.live) return@launch
-                    prepared += store.prepare(uri)
+                    prepared += store.prepare(uri, quality)
                 }
                 if (status.value.session != session || !status.value.live) return@launch
                 handedOff = true

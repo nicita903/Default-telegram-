@@ -18,9 +18,9 @@ internal object MediaImages {
     private val decoders = Semaphore(2)
     private var generation = 0L
     @Synchronized fun clear() { generation++; cache.evictAll() }
-    suspend fun loadUri(context: android.content.Context, uri: String, session: Long): DecodedMediaImage? = withContext(Dispatchers.IO) {
+    suspend fun loadUri(context: android.content.Context, uri: String, session: Long, edge: Int = 512): DecodedMediaImage? = withContext(Dispatchers.IO) {
         decoders.withPermit {
-            val key = "picker:$session:$uri:512"
+            val key = "picker:$session:$uri:$edge"
             cache.get(key)?.let { return@withPermit it }
             val started = synchronized(this@MediaImages) { generation }
             try {
@@ -28,7 +28,7 @@ internal object MediaImages {
                 var height = 0
                 val bitmap = android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(context.contentResolver, android.net.Uri.parse(uri))) { decoder, info, _ ->
                     width = info.size.width; height = info.size.height
-                    val scale = (512.0 / maxOf(width, height)).coerceAtMost(1.0)
+                    val scale = (edge.toDouble() / maxOf(width, height)).coerceAtMost(1.0)
                     decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
                     decoder.setTargetSize((width * scale).toInt().coerceAtLeast(1), (height * scale).toInt().coerceAtLeast(1))
                 }
@@ -41,6 +41,26 @@ internal object MediaImages {
             catch (_: OutOfMemoryError) { cache.evictAll(); null }
         }
     }
+    suspend fun loadGalleryThumbnail(context: android.content.Context, uri: String, modified: Long, revision: Int): DecodedMediaImage? = withContext(Dispatchers.IO) {
+        decoders.withPermit {
+            val key = "gallery:$revision:$modified:$uri"
+            cache.get(key)?.let { return@withPermit it }
+            val started = synchronized(this@MediaImages) { generation }
+            suspendCancellableCoroutine<DecodedMediaImage?> { continuation ->
+                val signal = android.os.CancellationSignal()
+                continuation.invokeOnCancellation { signal.cancel() }
+                try {
+                    val bitmap = context.contentResolver.loadThumbnail(android.net.Uri.parse(uri), android.util.Size(256, 256), signal)
+                    val image = DecodedMediaImage(bitmap, bitmap.width, bitmap.height)
+                    if (continuation.isActive) {
+                        synchronized(this@MediaImages) { if (started == generation) cache.put(key, image) }
+                        continuation.resumeWith(Result.success(image))
+                    } else bitmap.recycle()
+                } catch (_: Exception) { if (continuation.isActive) continuation.resumeWith(Result.success(null)) }
+                catch (_: OutOfMemoryError) { cache.evictAll(); if (continuation.isActive) continuation.resumeWith(Result.success(null)) }
+            }
+        }
+    }
     suspend fun load(path: String, edge: Int, session: Long): DecodedMediaImage? = withContext(Dispatchers.IO) {
         decoders.withPermit {
             try {
@@ -49,14 +69,16 @@ internal object MediaImages {
                 if (!file.isFile) return@withPermit null
                 val key = "$session:$path:${file.lastModified()}:$edge"
                 cache.get(key)?.let { return@withPermit it }
-                val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                BitmapFactory.decodeFile(path, bounds)
-                if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return@withPermit null
-                var sample = 1
-                while (maxOf(bounds.outWidth, bounds.outHeight) / sample > edge) sample *= 2
-                val bitmap = BitmapFactory.decodeFile(path, BitmapFactory.Options().apply { inSampleSize = sample }) ?: return@withPermit null
+                var width = 0
+                var height = 0
+                val bitmap = android.graphics.ImageDecoder.decodeBitmap(android.graphics.ImageDecoder.createSource(file)) { decoder, info, _ ->
+                    width = info.size.width; height = info.size.height
+                    val scale = (edge.toDouble() / maxOf(width, height)).coerceAtMost(1.0)
+                    decoder.allocator = android.graphics.ImageDecoder.ALLOCATOR_SOFTWARE
+                    decoder.setTargetSize((width * scale).toInt().coerceAtLeast(1), (height * scale).toInt().coerceAtLeast(1))
+                }
                 ensureActive()
-                DecodedMediaImage(bitmap, bounds.outWidth, bounds.outHeight).also { image ->
+                DecodedMediaImage(bitmap, width, height).also { image ->
                     synchronized(this@MediaImages) { if (generationAtStart == generation) cache.put(key, image) }
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
@@ -65,3 +87,8 @@ internal object MediaImages {
         }
     }
 }
+
+private val ImageDocumentExtensions = setOf("jpg", "jpeg", "png", "heic", "heif", "avif", "webp", "gif", "bmp")
+internal fun com.vector.core.media.TelegramMedia.isImageDocument(): Boolean =
+    kind == com.vector.core.media.MediaKind.Document && (mime.startsWith("image/") ||
+        name.substringAfterLast('.', "").lowercase() in ImageDocumentExtensions)

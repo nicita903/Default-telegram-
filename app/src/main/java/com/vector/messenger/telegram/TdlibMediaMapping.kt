@@ -45,7 +45,8 @@ internal fun mapTelegramMedia(content: JSONObject): TelegramMedia? {
     val file = media.optJSONObject(fileField) ?: return null
     val mime = media.safeText("mime_type").takeIf { it.matches(Regex("[a-zA-Z0-9.+-]+/[a-zA-Z0-9.+-]+")) } ?: defaultMime
     return TelegramMedia(MediaKind.valueOf(kind), mapMediaFile(file),
-        media.safeText("file_name").replace(Regex("[\\p{Cntrl}/\\\\]"), "_").take(180).ifBlank { "$kind.${if (mime == "image/gif") "gif" else if (kind == "Document") "bin" else "mp4"}" },
+        media.safeText("file_name").replace(Regex("[\\p{Cntrl}/\\\\]"), "_").take(if (kind == "Document") 255 else 180).ifBlank { "$kind.${if (mime == "image/gif") "gif" else if (kind == "Document") "bin" else "mp4"}" },
         mime, media.optJSONObject("thumbnail")?.optJSONObject("file")?.let(::mapMediaFile),
-        media.optInt("width"), media.optInt("height"), media.optInt("duration"))
+        media.optInt("width").takeIf { it > 0 } ?: media.optJSONObject("thumbnail")?.optInt("width") ?: 0,
+        media.optInt("height").takeIf { it > 0 } ?: media.optJSONObject("thumbnail")?.optInt("height") ?: 0, media.optInt("duration"))
 }

@@ -31,6 +31,8 @@ import com.vector.messenger.design.DefaultHeader
 import com.vector.messenger.design.DefaultIconControl
 import com.vector.messenger.design.VectorMotionSpec
 import com.vector.messenger.design.backdropBlur
+import com.vector.messenger.design.LocalConversationHeaderInset
+import androidx.compose.ui.platform.LocalLayoutDirection
 import com.vector.messenger.feature.*
 import com.vector.messenger.navigation.gesture.*
 import kotlinx.coroutines.launch
@@ -164,6 +166,8 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                             } else "",
                         avatarName = if (conversation) contact?.title else null,
                         avatarPhoto = if (conversation) contact?.photo else null,
+                        avatarId = if (conversation) contact?.let { it.userId ?: it.id } ?: 0 else 0,
+                        avatarUser = conversation && contact?.userId != null,
                         // Root controls stay on the edges; nested screens retain their Back action.
                         leading = {
                             if (internalBack || searchVisible) {
@@ -187,7 +191,14 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                     )
                 } },
             ) { padding ->
-                Box(Modifier.fillMaxSize().padding(padding).consumeWindowInsets(padding)
+                val overlayHeader = conversation && !searchOwnsInput
+                val direction = LocalLayoutDirection.current
+                val bodyPadding = if (overlayHeader) PaddingValues(
+                    start = padding.calculateStartPadding(direction), end = padding.calculateEndPadding(direction),
+                    bottom = padding.calculateBottomPadding(), top = 0.dp,
+                ) else padding
+                CompositionLocalProvider(LocalConversationHeaderInset provides if (overlayHeader) padding.calculateTopPadding() else 0.dp) {
+                Box(Modifier.fillMaxSize().padding(bodyPadding).consumeWindowInsets(padding)
                     .moduleGestureSurface(gesture, ModuleGestureSurface.Content).testTag("module_gesture_surface")) {
                     AnimatedContent(
                         targetState = displayedModule,
@@ -210,6 +221,7 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                         }
                     }
                 }
+            }
             }
             // Feedback overlay for the same gesture: it consumes no pointer input and sets no semantics.
             AuroraGestureCue(gesture.state, gesture.direction, appearance.hold)

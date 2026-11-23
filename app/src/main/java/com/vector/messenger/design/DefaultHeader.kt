@@ -21,6 +21,7 @@ fun DefaultHeader(
     leading: @Composable RowScope.() -> Unit = {},
     trailing: @Composable RowScope.() -> Unit = {},
     avatarName: String? = null, avatarPhoto: com.vector.core.profile.ProfilePhoto? = null,
+    avatarId: Long = 0, avatarUser: Boolean = false,
 ) {
     val colors = DefaultDesign.colors
     Box(
@@ -48,7 +49,7 @@ fun DefaultHeader(
             Modifier.align(Alignment.Center).fillMaxWidth().padding(horizontal = 56.dp).heightIn(min = 48.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center,
         ) {
-            avatarName?.let { TelegramAvatar(it, avatarPhoto, 34.dp); Spacer(Modifier.width(10.dp)) }
+            avatarName?.let { TelegramAvatar(it, avatarPhoto, 36.dp, avatarId, avatarUser); Spacer(Modifier.width(10.dp)) }
             Column(Modifier.weight(1f, fill = false), horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(title, style = MaterialTheme.typography.titleLarge, color = colors.text, maxLines = 1,

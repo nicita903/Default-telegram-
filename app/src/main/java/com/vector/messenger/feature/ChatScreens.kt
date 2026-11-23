@@ -82,7 +82,7 @@ fun ChatsScreen(viewModel: ChatsViewModel, onSelect: (Long) -> Unit, onSearch: (
             .graphicsLayer { alpha = (pull.distance / with(density) { appearance.pullDistance.dp.toPx() }).coerceIn(0f, 1f) }, tint = colors.accent)
         LazyColumn(Modifier.fillMaxSize().graphicsLayer { translationY = if (pull.distance > 0) pull.distance * .45f * strength else offset.value }.testTag("chat_list"), state = listState, contentPadding = PaddingValues(bottom = 24.dp)) {
             items(chats, key = { it.id }, contentType = { "chat" }) { chat ->
-                LaunchedEffect(chat.id, chat.photo?.fileId) { viewModel.avatar(chat.id) }
+                if (com.vector.messenger.feature.avatar.LocalAvatarViewModel.current == null) LaunchedEffect(chat.id, chat.photo?.fileId) { viewModel.avatar(chat.id) }
                 ChatRow(chat, selectedChat == chat.id,
                     { selectedChat = chat.id; onSelect(chat.id) }, { viewModel.pin(chat.id) }, { viewModel.archive(chat.id) })
             }
@@ -106,7 +106,7 @@ private fun ChatRow(chat: Chat, selected: Boolean, onClick: () -> Unit, onPin: (
         .clickable(interactionSource = interaction, indication = null, onClick = onClick).heightIn(min = if (LocalAppearance.current.compact) 72.dp else 88.dp), verticalAlignment = Alignment.CenterVertically) {
         Box(Modifier.width(2.dp).height(38.dp).background(if (selected) colors.accent else Color.Transparent))
         Spacer(Modifier.width(18.dp))
-        TelegramAvatar(chat.title, chat.photo, 52.dp)
+        TelegramAvatar(chat.title, chat.photo, 48.dp, chat.userId ?: chat.id, user = chat.userId != null)
         Spacer(Modifier.width(14.dp))
         Column(Modifier.weight(1f).padding(vertical = 16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -173,7 +173,7 @@ fun ContactsScreen(contacts: List<Chat>, onSelect: (Long) -> Unit) {
         items(contacts, key = { it.id }) { contact ->
             Row(Modifier.fillMaxWidth().clickable { onSelect(contact.id) }.heightIn(min = 76.dp).padding(horizontal = 20.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-                TelegramAvatar(contact.title, contact.photo, 42.dp)
+                TelegramAvatar(contact.title, contact.photo, 44.dp, contact.userId ?: contact.id, user = contact.userId != null)
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(contact.title, style = MaterialTheme.typography.titleMedium, color = colors.text)
                     Text("Sample contact", style = MaterialTheme.typography.bodySmall, color = colors.secondary)

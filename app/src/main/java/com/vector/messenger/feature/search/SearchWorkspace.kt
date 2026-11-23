@@ -130,7 +130,7 @@ private fun ChatSearchResults(viewModel: SearchViewModel, query: String, listSta
         }
         if (category in listOf("All", "People", "Conversations")) {
             items(matchingChats.filter { category != "People" || it.kind == ChatKind.Contact }, key = { "chat:${it.id}" }) { chat ->
-                SearchResultRow(chat.title, if (chat.kind == ChatKind.Contact) "Person · ${chat.preview}" else "${chat.kind} · ${chat.preview}", avatar = chat.title) { viewModel.rememberQuery(query); onOpen(chat.id) }
+                SearchResultRow(chat.title, if (chat.kind == ChatKind.Contact) "Person · ${chat.preview}" else "${chat.kind} · ${chat.preview}", avatar = chat.title, avatarPhoto = chat.photo, avatarId = chat.userId ?: chat.id, avatarUser = chat.userId != null) { viewModel.rememberQuery(query); onOpen(chat.id) }
             }
         }
         if (category in listOf("All", "Messages", "Media", "Files", "Links")) {
@@ -210,10 +210,10 @@ private fun SearchChoices(options: List<String>, selected: String, onSelect: (St
 }
 
 @Composable
-private fun SearchResultRow(title: String, subtitle: String, icon: androidx.compose.ui.graphics.vector.ImageVector = Icons.Default.Person, avatar: String? = null, onClick: () -> Unit) {
+private fun SearchResultRow(title: String, subtitle: String, icon: androidx.compose.ui.graphics.vector.ImageVector = Icons.Default.Person, avatar: String? = null, avatarPhoto: com.vector.core.profile.ProfilePhoto? = null, avatarId: Long = 0, avatarUser: Boolean = false, onClick: () -> Unit) {
     Row(Modifier.fillMaxWidth().clickable(interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, indication = null, onClick = onClick)
         .heightIn(min = if (LocalAppearance.current.compact) 64.dp else 80.dp).padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-        if (avatar != null) ChatAvatar(avatar, 40.dp)
+        if (avatar != null) TelegramAvatar(avatar, avatarPhoto, 40.dp, avatarId, avatarUser)
         else Box(Modifier.size(40.dp).background(DefaultDesign.colors.raised, DefaultDesign.avatarShape), contentAlignment = Alignment.Center) { Icon(icon, null, Modifier.size(18.dp), tint = DefaultDesign.colors.accent) }
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             Text(title, color = DefaultDesign.colors.text, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)

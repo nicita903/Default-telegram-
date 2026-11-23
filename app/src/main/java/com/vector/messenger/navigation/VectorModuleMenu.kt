@@ -70,6 +70,8 @@ fun VectorModuleMenu(open: Boolean, active: AppModule, onDismiss: () -> Unit, on
             ) {
                 Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 12.dp, top = 14.dp, bottom = 6.dp),
                     verticalAlignment = Alignment.CenterVertically) {
+                    com.vector.messenger.feature.avatar.OwnAccountAvatar(44.dp)
+                    Spacer(Modifier.width(12.dp))
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
                         Text("Default", style = MaterialTheme.typography.headlineSmall, color = colors.text)
                         Text("Modules", style = MaterialTheme.typography.labelSmall,

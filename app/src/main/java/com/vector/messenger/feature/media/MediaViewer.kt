@@ -62,7 +62,10 @@ fun MediaViewer(items: List<MediaItem>, initialId: Long, viewModel: MediaViewMod
                             else VideoMedia(path, item.media.file.id, item.media.kind == MediaKind.Animation)
                         } else MediaPlaceholder(item, item.media.thumbnail?.let { state.files[it.id] }, state.session)
                     }
-                    MediaKind.Document -> Column(Modifier.align(Alignment.Center).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                    MediaKind.Document -> if (item.media.isImageDocument()) {
+                        ZoomPhoto(item, file, item.media.thumbnail?.let { state.files[it.id] }, state.session,
+                            onTap = { controls = !controls }, onClose = onClose, onNavigate = ::navigate)
+                    } else Column(Modifier.align(Alignment.Center).padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                         Text(item.media.name, color = DefaultDesign.colors.text)
                         Text(item.media.mime, color = DefaultDesign.colors.secondary)
                         if (file?.complete == true && item.exportAllowed) DefaultAction("Open document", { viewModel.external(context, item, false) })
@@ -123,6 +126,17 @@ private fun ZoomPhoto(item: MediaItem, file: MediaFile?, thumbnail: MediaFile?, 
     onTap: () -> Unit, onClose: () -> Unit, onNavigate: (Int) -> Unit) {
     val path = file?.path ?: thumbnail?.path
     val decoded by produceState<DecodedMediaImage?>(null, path, session) { value = path?.let { MediaImages.load(it, 2048, session) } }
+    val document = item.media.isImageDocument()
+    ZoomableImage(decoded, if (document) decoded?.width ?: 0 else item.media.width,
+        if (document) decoded?.height ?: 0 else item.media.height, if (document) null else file?.path, item.media.file.id, item.media.name,
+        if (path == null) "Loading photo…" else "Preview unavailable. Download again or open externally.", onTap, onClose, onNavigate)
+}
+
+/** Shared pointer owner for local selection previews and authenticated Telegram photos. */
+@Composable
+internal fun ZoomableImage(decoded: DecodedMediaImage?, sourceWidth: Int, sourceHeight: Int,
+    originalPath: String?, sourceKey: Any, description: String, placeholder: String,
+    onTap: () -> Unit, onClose: () -> Unit, onNavigate: (Int) -> Unit) {
     var zoom by remember { mutableFloatStateOf(1f) }
     var pan by remember { mutableStateOf(Offset.Zero) }
     var pull by remember { mutableStateOf(Offset.Zero) }
@@ -134,8 +148,8 @@ private fun ZoomPhoto(item: MediaItem, file: MediaFile?, thumbnail: MediaFile?, 
     val currentTap by rememberUpdatedState(onTap)
     val currentClose by rememberUpdatedState(onClose)
     val currentNavigate by rememberUpdatedState(onNavigate)
-    val width = item.media.width.takeIf { it > 0 } ?: decoded?.width ?: 1
-    val height = item.media.height.takeIf { it > 0 } ?: decoded?.height ?: 1
+    val width = sourceWidth.takeIf { it > 0 } ?: decoded?.width ?: 1
+    val height = sourceHeight.takeIf { it > 0 } ?: decoded?.height ?: 1
     val fit = if (viewport.width == 0 || viewport.height == 0) 1f else min(viewport.width.toFloat() / width, viewport.height.toFloat() / height)
     val maximumZoom = max(4f, 1f / fit).coerceAtMost(64f)
     fun bounded(value: Offset, scale: Float): Offset {
@@ -145,7 +159,6 @@ private fun ZoomPhoto(item: MediaItem, file: MediaFile?, thumbnail: MediaFile?, 
     }
     // A sampled whole-image preview plus a bounded original-resolution visible tile.
     // Region decode waits for a short quiet interval; dragging never decodes on Main.
-    val originalPath = file?.path
     val region by produceState<ImageRegion?>(null, originalPath, zoom, pan, viewport) {
         value = null
         if (originalPath != null && zoom > 1.25f && viewport.width > 0) {
@@ -167,7 +180,7 @@ private fun ZoomPhoto(item: MediaItem, file: MediaFile?, thumbnail: MediaFile?, 
             }
         }
     }
-    Box(Modifier.fillMaxSize().onSizeChanged { viewport = it }.pointerInput(item.media.file.id, viewport, width, height) {
+    Box(Modifier.fillMaxSize().onSizeChanged { viewport = it }.pointerInput(sourceKey, viewport, width, height) {
         var lastTap = 0L
         var lastPosition = Offset.Zero
         awaitEachGesture {
@@ -225,8 +238,8 @@ private fun ZoomPhoto(item: MediaItem, file: MediaFile?, thumbnail: MediaFile?, 
     }) {
         val image = decoded
         if (image == null) Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(if (path == null) "Loading photo…" else "Preview unavailable. Download again or open externally.", color = DefaultDesign.colors.secondary)
-        } else Image(image.bitmap.asImageBitmap(), item.media.name, Modifier.fillMaxSize().graphicsLayer {
+            Text(placeholder, color = DefaultDesign.colors.secondary)
+        } else Image(image.bitmap.asImageBitmap(), description, Modifier.fillMaxSize().graphicsLayer {
             scaleX = zoom; scaleY = zoom
             translationX = pan.x + returnedX.value; translationY = pan.y + returnedY.value
         }, contentScale = ContentScale.Fit)

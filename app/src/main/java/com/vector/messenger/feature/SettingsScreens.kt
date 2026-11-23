@@ -38,6 +38,7 @@ fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit) {
     val previews by viewModel.hidePreviews.collectAsStateWithLifecycle()
     val settings by viewModel.appearance.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp).testTag("settings_scroll"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        com.vector.messenger.feature.avatar.AccountSummary()
         Text("Appearance", style = MaterialTheme.typography.titleMedium)
         Text("Background", style = MaterialTheme.typography.titleMedium)
         Row(Modifier.fillMaxWidth().excludeModuleGestures(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {

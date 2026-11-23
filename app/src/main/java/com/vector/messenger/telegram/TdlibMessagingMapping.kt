@@ -53,7 +53,7 @@ internal fun contentText(content: JSONObject): String {
         "messageLocation", "messageVenue" -> "Location"
         else -> "Unsupported message"
     }
-    if (type == "messagePhoto") return caption
+    if (type == "messagePhoto" || type == "messageDocument") return caption
     return if (caption.isBlank()) label else "$label · $caption"
 }
 internal fun mapMessageReactions(info: JSONObject?): List<MessageReaction> {
@@ -99,8 +99,13 @@ internal fun mapTelegramMessage(json: JSONObject): Message {
     )
 }
 private fun restrictedMessage(message: JSONObject) = restricted(message) || message.optJSONObject("self_destruct_type") != null || message.optJSONObject("ephemeral_content") != null
-private fun messagePreview(message: JSONObject): String = if (restrictedMessage(message))
-    "Content unavailable" else contentText(message.optJSONObject("content") ?: JSONObject()).ifEmpty { "Photo" }
+private fun messagePreview(message: JSONObject): String {
+    if (restrictedMessage(message)) return "Content unavailable"
+    val content = message.optJSONObject("content") ?: JSONObject()
+    return contentText(content).ifEmpty {
+        if (content.optString("@type") == "messageDocument") content.optJSONObject("document")?.safeText("file_name")?.ifBlank { "File" } ?: "File" else "Photo"
+    }
+}
 internal fun mapPosition(json: JSONObject): ChatPosition? {
     val list = json.optJSONObject("list")?.optString("@type")
     if (list !in setOf("chatListMain", "chatListArchive")) return null
@@ -123,7 +128,9 @@ internal fun mapTelegramChat(json: JSONObject, photo: (JSONObject) -> ProfilePho
         photo = json.optJSONObject("photo")?.optJSONObject("small")?.let(photo),
         canSend = !blocked && (json.optJSONObject("permissions")?.optBoolean("can_send_basic_messages") ?: false),
         protectedContent = blocked || json.optBoolean("has_protected_content"),
-        canSendPhotos = !blocked && json.optJSONObject("permissions")?.optBoolean("can_send_photos") == true), positions(json),
+        canSendPhotos = !blocked && json.optJSONObject("permissions")?.optBoolean("can_send_photos") == true,
+        canSendDocuments = !blocked && json.optJSONObject("permissions")?.optBoolean("can_send_documents") == true,
+        userId = type.optLong("user_id").takeIf { it > 0 }), positions(json),
         lastMessageId = last?.optLong("id") ?: 0, lastReadOutbox = json.optLong("last_read_outbox_message_id"),
         peerId = if (type.optString("@type") == "chatTypeSupergroup") type.optLong("supergroup_id") else type.optLong("user_id"),
         supergroup = type.optString("@type") == "chatTypeSupergroup", lastRestricted = last?.let(::restrictedMessage) == true)
@@ -144,7 +151,8 @@ internal fun mapChatUpdate(json: JSONObject, photo: (JSONObject) -> ProfilePhoto
         "updateChatReadInbox" -> ChatUpdate.Unread(id, json.optInt("unread_count"))
         "updateChatReadOutbox" -> ChatUpdate.ReadOutbox(id, json.optLong("last_read_outbox_message_id"))
         "updateChatPermissions" -> ChatUpdate.Permissions(id, json.optJSONObject("permissions")?.optBoolean("can_send_basic_messages") == true,
-            json.optJSONObject("permissions")?.optBoolean("can_send_photos") == true)
+            json.optJSONObject("permissions")?.optBoolean("can_send_photos") == true,
+            json.optJSONObject("permissions")?.optBoolean("can_send_documents") == true)
         "updateChatHasProtectedContent" -> ChatUpdate.Protection(id, json.optBoolean("has_protected_content"))
         "updateNewMessage" -> ChatUpdate.Upsert(mapTelegramMessage(json.getJSONObject("message")))
         "updateMessageSendSucceeded", "updateMessageSendFailed" -> ChatUpdate.Upsert(mapTelegramMessage(json.getJSONObject("message")), json.optLong("old_message_id"))

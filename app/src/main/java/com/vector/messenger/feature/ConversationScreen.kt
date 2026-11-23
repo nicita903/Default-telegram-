@@ -3,10 +3,8 @@ package com.vector.messenger.feature
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import androidx.core.net.toUri
-import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.Animatable
 import androidx.compose.ui.draw.clip
@@ -35,6 +33,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.*
@@ -83,11 +82,18 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
     var photoDraftSource by rememberSaveable(chatId, status.session) { mutableStateOf("") }
     var photoAlbum by rememberSaveable(chatId, status.session) { mutableStateOf(true) }
     var photoUncertain by rememberSaveable(chatId, status.session) { mutableStateOf(false) }
-    var pickerSession by rememberSaveable { mutableStateOf<Long?>(null) }
-    var pickerChat by rememberSaveable { mutableStateOf<Long?>(null) }
+    var galleryOpen by rememberSaveable(chatId, status.session) { mutableStateOf(false) }
+    var previewOpen by rememberSaveable(chatId, status.session) { mutableStateOf(false) }
+    var previewInitial by rememberSaveable(chatId, status.session) { mutableStateOf<String?>(null) }
+    var qualityName by rememberSaveable(chatId, status.session) { mutableStateOf(PhotoQuality.STANDARD.name) }
+    val photoQuality = PhotoQuality.valueOf(qualityName)
+    var photoAccessError by remember(chatId, status.session) { mutableStateOf<String?>(null) }
     val listState = rememberLazyListState()
+    val headerInset = LocalConversationHeaderInset.current
+    val visibleTop = with(LocalDensity.current) { headerInset.toPx() }
     var previousLastId by rememberSaveable(chatId, status.session) { mutableStateOf<Long?>(null) }
     val context = LocalContext.current
+    val attachmentKeyboard = LocalSoftwareKeyboardController.current
     val mediaViewModel = LocalMediaViewModel.current
     val voiceViewModel = com.vector.messenger.feature.audio.LocalVoiceViewModel.current
     val voiceState by remember(voiceViewModel) {
@@ -120,37 +126,42 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
         viewModel.enter(chatId)
         onStopOrDispose { viewModel.leave(chatId) }
     }
-    LaunchedEffect(listState, newestFirst, history, status.session) {
-        snapshotFlow { listState.layoutInfo.visibleItemsInfo.mapNotNull { item -> newestFirst.getOrNull(item.index)?.id } }
+    LaunchedEffect(listState, newestFirst, history, status.session, visibleTop) {
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.filter { it.offset + it.size > visibleTop }.mapNotNull { item -> newestFirst.getOrNull(item.index)?.id } }
             .collect { ids ->
                 viewModel.visible(chatId, ids)
                 if (status.live && ids.any { it == newestFirst.lastOrNull()?.id } && !history.loading && history.error == null && history.hasMore)
                     viewModel.older(chatId)
             }
     }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) scope.launch {
-            try {
-                val info = withContext(Dispatchers.IO) {
-                    val name = context.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
-                        if (it.moveToFirst()) it.getString(0) else null
-                    } ?: "Document"
-                    name to (context.contentResolver.getType(uri) ?: "application/octet-stream")
+    fun submitSelectedPhotos() {
+        if (!galleryOpen || selectedPhotos.isEmpty() || busy || photoUncertain) return
+        val selection = selectedPhotos.toList()
+        val caption = photoCaption
+        val reply = replyTo
+        val session = status.session
+        viewModel.sendPhotos(chatId, selection, caption, photoAlbum, reply, photoQuality) { result ->
+            if (viewModel.status.value.session == session) {
+                selectedPhotos = ArrayList(selection.drop(result.accepted))
+                photoUncertain = result.result == SendResult.Uncertain
+                if (result.accepted > 0) {
+                    photoCaption = ""
+                    if (draft.text == photoDraftSource) draft = TextFieldValue()
+                    if (replyTo == reply) replyTo = null
                 }
-                attachmentUri = uri.toString(); attachmentName = info.first; attachmentMime = info.second; fileError = null
-            } catch (_: SecurityException) { fileError = "This file is no longer accessible. Choose it again." }
-            catch (_: java.io.IOException) { fileError = "Unable to read this file." }
+                if (selectedPhotos.isEmpty()) { galleryOpen = false; previewOpen = false }
+            }
         }
     }
-    val photoPicker = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)) { uris ->
-        if (status.live && pickerSession == status.session && pickerChat == chatId && uris.isNotEmpty()) {
-            selectedPhotos = ArrayList(uris.distinct().take(10).map { uri ->
-                runCatching { context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION) }
-                uri.toString()
-            })
-            photoCaption = draft.text; photoDraftSource = draft.text
-            photoAlbum = true; photoUncertain = false; viewModel.clearPhotoError()
-        }
+    val originalPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted && photoQuality == PhotoQuality.FILE) { photoAccessError = null; submitSelectedPhotos() }
+        else if (!granted) photoAccessError = "FILE requires original media access to preserve every byte, including metadata. Allow it in app permissions or choose Standard / HD."
+    }
+    fun sendSelectedPhotos() {
+        if (photoQuality == PhotoQuality.FILE && androidx.core.content.ContextCompat.checkSelfPermission(context,
+                android.Manifest.permission.ACCESS_MEDIA_LOCATION) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            originalPermission.launch(android.Manifest.permission.ACCESS_MEDIA_LOCATION)
+        } else submitSelectedPhotos()
     }
     LaunchedEffect(messages.lastOrNull()?.id) {
         val last = messages.lastOrNull() ?: return@LaunchedEffect
@@ -163,7 +174,8 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
         }
     }
     Column(Modifier.fillMaxSize().designCanvas(colors.canvas).imePadding()) {
-        LazyColumn(state = listState, reverseLayout = true, modifier = Modifier.weight(1f).testTag("message_list"), contentPadding = PaddingValues(horizontal = 16.dp, vertical = 20.dp)) {
+        LazyColumn(state = listState, reverseLayout = true, modifier = Modifier.weight(1f).conversationMessageDissolve().testTag("message_list"),
+            contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = headerInset + 20.dp, bottom = 20.dp)) {
             itemsIndexed(newestFirst, key = { _, it -> it.id }, contentType = { _, _ -> "message" }) { index, message ->
                 val outgoing = message.outgoing
                 val previous = newestFirst.getOrNull(index + 1)
@@ -175,10 +187,14 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
                 Column {
                 MessageDateSeparator(message.date, previous?.date)
                 Row(Modifier.fillMaxWidth().padding(top = if (grouped) 2.dp else 8.dp).excludeModuleGestures(), horizontalArrangement = if (outgoing) Arrangement.End else Arrangement.Start, verticalAlignment = Alignment.Bottom) {
-                    if (!outgoing && chat?.kind == ChatKind.Group) { ChatAvatar(message.senderName ?: chat.title, 28.dp); Spacer(Modifier.width(8.dp)) }
+                    if (!outgoing && chat?.kind == ChatKind.Group) { TelegramAvatar(message.senderName ?: chat.title, if (message.senderId != 0L) null else chat.photo, 28.dp, if (message.senderId != 0L) message.senderId else chat.id, user = message.senderId != 0L && !message.senderIsChat); Spacer(Modifier.width(8.dp)) }
                     Column {
                     if (!outgoing && !grouped && chat?.kind == ChatKind.Group) message.senderName?.let { Text(it, color = colors.accent, style = MaterialTheme.typography.labelSmall) }
-                    MessageBubble(message, byId[message.replyTo], position,
+                    val statusVisible by remember(listState, message.id, visibleTop) {
+                        derivedStateOf { listState.layoutInfo.visibleItemsInfo.any { it.key == message.id && it.offset + it.size > visibleTop } }
+                    }
+                    MessageBubble(message, byId[message.replyTo], position, statusVisible = statusVisible,
+                        statusTransitions = viewModel.messageStatusTransitions, statusSession = status.session,
                         onActions = { actionsFor = message.id }, onReply = { if (!busy && !recording) { editId = null; replyTo = message.id } },
                         onReaction = { viewModel.react(chatId, message.id, it) },
                         onCancelUpload = { viewModel.cancelPhotoSend(chatId, message.id) },
@@ -218,14 +234,13 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
             onRemoveAttachment = { attachmentUri = null; attachmentName = null; attachmentMime = null },
             error = fileError ?: error,
             onAttach = {
-                if (status.live) {
-                    pickerSession = status.session; pickerChat = chatId
-                    try { photoPicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)) }
-                    catch (_: ActivityNotFoundException) { fileError = "No system photo picker is available." }
-                } else try { picker.launch(arrayOf("*/*")) }
-                catch (_: ActivityNotFoundException) { fileError = "No document picker is available." }
+                attachmentKeyboard?.hide()
+                selectedPhotos = arrayListOf(); galleryOpen = true; previewOpen = false
+                photoCaption = draft.text; photoDraftSource = draft.text
+                photoAlbum = true; photoUncertain = false; qualityName = PhotoQuality.STANDARD.name
+                photoAccessError = null; viewModel.clearPhotoError()
             },
-            attachmentsEnabled = !status.live || chat?.canSendPhotos == true,
+            attachmentsEnabled = !status.live || chat?.canSendPhotos == true || chat?.canSendDocuments == true,
             onSubmit = submit@ {
                 // A stale check-button callback must never become a new-message send.
                 if (editId != editingMessage) return@submit
@@ -251,30 +266,20 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
         )
     }
 
-    if (selectedPhotos.isNotEmpty()) PhotoSendPreview(selectedPhotos, photoCaption, photoAlbum, busy, photoUncertain, photoError,
-        viewModel, onCaption = { photoCaption = it; viewModel.clearPhotoError() }, onAlbum = { photoAlbum = it },
-        onRemove = { uri -> viewModel.releasePhotoSelection(listOf(uri)); selectedPhotos = ArrayList(selectedPhotos.filterNot { it == uri }) },
-        onDismiss = { viewModel.releasePhotoSelection(selectedPhotos.toList()); selectedPhotos = arrayListOf(); viewModel.clearPhotoError() }, onSend = {
-            val selection = selectedPhotos.toList()
-            val caption = photoCaption
-            val reply = replyTo
-            val session = status.session
-            viewModel.sendPhotos(chatId, selection, caption, photoAlbum, reply) { result ->
-                if (viewModel.status.value.session == session) {
-                    viewModel.releasePhotoSelection(selection.take(result.accepted))
-                    selectedPhotos = ArrayList(selection.drop(result.accepted))
-                    photoUncertain = result.result == SendResult.Uncertain
-                    if (result.accepted > 0) {
-                        photoCaption = ""
-                        if (draft.text == photoDraftSource) draft = TextFieldValue()
-                        if (replyTo == reply) replyTo = null
-                    }
-                }
-            }
-        })
+    if (galleryOpen) PhotoGalleryPanel(viewModel, selectedPhotos, photoQuality, busy, photoUncertain,
+        photoAccessError ?: photoError,
+        onSelection = { selectedPhotos = ArrayList(it); if (it.isEmpty()) previewOpen = false },
+        onPreview = { previewInitial = it; previewOpen = true }, onSend = ::sendSelectedPhotos,
+        onDismiss = { galleryOpen = false; previewOpen = false; selectedPhotos = arrayListOf(); viewModel.clearPhotoError() })
+    if (galleryOpen && previewOpen && selectedPhotos.isNotEmpty()) PhotoSendPreview(selectedPhotos, photoCaption, photoAlbum, busy, photoUncertain,
+        photoAccessError ?: photoError, viewModel,
+        onCaption = { photoCaption = it; viewModel.clearPhotoError() }, onAlbum = { photoAlbum = it },
+        onRemove = { uri -> selectedPhotos = ArrayList(selectedPhotos.filterNot { it == uri }); if (selectedPhotos.isEmpty()) previewOpen = false },
+        onDismiss = { previewOpen = false }, onSend = ::sendSelectedPhotos, initialUri = previewInitial,
+        quality = photoQuality, onQuality = { qualityName = it.name; photoAccessError = null; viewModel.clearPhotoError() })
     if (chatTool == "info") DefaultDialog("Conversation info", { chatTool = null }) {
         chat?.let { current ->
-            TelegramAvatar(current.title, current.photo, 64.dp)
+            TelegramAvatar(current.title, current.photo, 64.dp, current.userId ?: current.id, user = current.userId != null)
             Text(current.title, color = colors.text, style = MaterialTheme.typography.titleLarge)
             Text("${current.kind} · ${if (status.live) "Telegram" else "Demo conversation"}", color = colors.secondary)
             Text("Conversation ID: ${current.id}", color = colors.secondary, style = MaterialTheme.typography.bodySmall)
@@ -337,7 +342,8 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
 @Composable
 private fun MessageBubble(message: Message, reply: Message?, position: MessageGroupPosition,
     onActions: () -> Unit, onReply: () -> Unit, onReaction: (String) -> Unit, onCancelUpload: () -> Unit, onRetryUpload: () -> Unit, onOpenAttachment: (Attachment) -> Unit,
-    mediaViewModel: MediaViewModel?, mediaItem: MediaItem?, onMedia: () -> Unit,
+    mediaViewModel: MediaViewModel?, mediaItem: MediaItem?, onMedia: () -> Unit, statusVisible: Boolean,
+    statusTransitions: MessageStatusTransitions, statusSession: Long,
 ) {
     val outgoing = message.outgoing
     val colors = DefaultDesign.colors
@@ -398,7 +404,7 @@ private fun MessageBubble(message: Message, reply: Message?, position: MessageGr
             Row(Modifier.align(Alignment.End), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Bottom) {
                 if (message.text.isNotEmpty()) Text(message.text, Modifier.weight(1f, fill = false),
                     color = colors.text, style = MaterialTheme.typography.bodyLarge)
-                MessageTimestamp(message)
+                MessageTimestamp(message, statusVisible = statusVisible, transitions = statusTransitions, session = statusSession)
             }
         }
     }
@@ -442,31 +448,4 @@ private fun CompactMessageContent(
     }
 }
 
-@Composable
-private fun MessageTimestamp(message: Message, modifier: Modifier = Modifier) {
-    val colors = DefaultDesign.colors
-    val outgoing = message.outgoing
-    Row(modifier.widthIn(max = 112.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(message.time, style = MaterialTheme.typography.labelSmall, color = colors.secondary)
-        if (outgoing) {
-            Box(Modifier.width(1.dp).height(10.dp).background(colors.line))
-            if (message.delivery == Delivery.LocalDemo) Icon(VectorIcons.Clock, "Stored locally; not sent to Telegram", Modifier.size(12.dp), tint = colors.accent)
-            Text(when (message.delivery) {
-                Delivery.LocalDemo -> "Local demo"
-                Delivery.Sending -> "Sending…"
-                Delivery.Failed -> "Failed"
-                Delivery.Read -> "✓✓"
-                Delivery.Sent -> "✓"
-                else -> ""
-            }, style = MaterialTheme.typography.labelSmall, color = if (message.delivery == Delivery.Read) colors.active else colors.secondary,
-                modifier = Modifier.semantics { contentDescription = when (message.delivery) {
-                    Delivery.Sent -> "Sent to Telegram"
-                    Delivery.Read -> "Read"
-                    Delivery.Failed -> "Message failed to send"
-                    Delivery.Sending -> "Sending message"
-                    else -> "Local demonstration message"
-                } })
-        }
-    }
 
-}

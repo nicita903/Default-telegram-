@@ -31,6 +31,7 @@ class MainActivity : ComponentActivity() {
     private val preferences: PreferencesViewModel by viewModels()
     private val authentication: AuthenticationViewModel by viewModels()
     private val profile: ProfileViewModel by viewModels()
+    private val avatars: com.vector.messenger.feature.avatar.AvatarViewModel by viewModels()
     private val search: SearchViewModel by viewModels()
     private val media: com.vector.messenger.feature.media.MediaViewModel by viewModels()
     private val audio: com.vector.messenger.feature.audio.AudioViewModel by viewModels()
@@ -58,6 +59,8 @@ class MainActivity : ComponentActivity() {
                 com.vector.messenger.feature.media.LocalMediaViewModel provides media,
                 com.vector.messenger.feature.audio.LocalAudioViewModel provides audio,
                 com.vector.messenger.feature.audio.LocalVoiceViewModel provides voice,
+                com.vector.messenger.feature.avatar.LocalAvatarViewModel provides avatars,
+                com.vector.messenger.feature.avatar.LocalAccountAction provides { accountOpen = true },
                 com.vector.messenger.feature.music.LocalMusicViewModel provides music) {
             DefaultTheme {
                 DefaultApp(chats, preferences, search, onAccount = { accountOpen = true })
@@ -66,6 +69,7 @@ class MainActivity : ComponentActivity() {
                 androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) { music.refresh() }
                 androidx.compose.runtime.LaunchedEffect(Unit) { if (intent.getBooleanExtra("open_music_player", false)) music.openPlayer() }
                 if (accountOpen) AuthenticationDialog(account, profile, onClose = { accountOpen = false })
+                com.vector.messenger.feature.avatar.AvatarHost(avatars, chats)
             }
             }
         }
