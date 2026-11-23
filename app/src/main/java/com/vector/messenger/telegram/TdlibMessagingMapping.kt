@@ -154,7 +154,7 @@ internal fun mapChatUpdate(json: JSONObject, photo: (JSONObject) -> ProfilePhoto
             json.optJSONObject("permissions")?.optBoolean("can_send_photos") == true,
             json.optJSONObject("permissions")?.optBoolean("can_send_documents") == true)
         "updateChatHasProtectedContent" -> ChatUpdate.Protection(id, json.optBoolean("has_protected_content"))
-        "updateNewMessage" -> ChatUpdate.Upsert(mapTelegramMessage(json.getJSONObject("message")))
+        "updateNewMessage" -> ChatUpdate.Upsert(mapTelegramMessage(json.getJSONObject("message")), isNew = true)
         "updateMessageSendSucceeded", "updateMessageSendFailed" -> ChatUpdate.Upsert(mapTelegramMessage(json.getJSONObject("message")), json.optLong("old_message_id"))
         "updateMessageContent" -> json.getJSONObject("new_content").let { ChatUpdate.Content(id, json.optLong("message_id"), contentText(it), mapTelegramMedia(it)) }
         "updateMessageInteractionInfo" -> ChatUpdate.Reactions(id, json.optLong("message_id"), mapMessageReactions(json.optJSONObject("interaction_info")))

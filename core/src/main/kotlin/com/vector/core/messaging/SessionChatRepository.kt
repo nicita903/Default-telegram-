@@ -20,6 +20,14 @@ class SessionChatRepository(
     override val messages = messageState.asStateFlow()
     override val status = statusState.asStateFlow()
     override val history = historyState.asStateFlow()
+    private val arrivalEvents = MutableSharedFlow<MessageArrival>(extraBufferCapacity = 128)
+    override val arrivals = arrivalEvents.asSharedFlow()
+    private val seenArrivals = linkedSetOf<Long>()
+    private var viewportNearLatest = true
+    private var viewportScrolling = false
+    override fun reportViewport(chatId: Long, nearLatest: Boolean, scrolling: Boolean) {
+        if (active == chatId) { viewportNearLatest = nearLatest; viewportScrolling = scrolling }
+    }
     private val records = mutableMapOf<Long, TelegramChat>()
     private val access = mutableMapOf<Pair<Long, Boolean>, ChatUpdate.Access>()
     private var orderDirty = true
@@ -47,7 +55,7 @@ class SessionChatRepository(
     init {
         scope.launch {
             authentication.state.map { it.step == AuthStep.Ready }.distinctUntilChanged().collectLatest { ready ->
-                epoch++; live = ready; active = null; atLatest = true; historyGeneration++
+                epoch++; live = ready; active = null; atLatest = true; seenArrivals.clear(); viewportNearLatest = true; viewportScrolling = false; historyGeneration++
                 records.clear(); access.clear(); window.clear(); versions.clear(); replaced.clear(); visibleReads.clear(); reactionRequests.clear(); reactionErrorState.value = null
                 orderDirty = true; ordered = emptyList()
                 sends.clear(); retries.clear(); photoCancellations.clear(); avatarRequests.clear(); listJobs.clear(); publish = null; historyJob = null
@@ -110,7 +118,12 @@ class SessionChatRepository(
         if (message.chatId != active || message.id in replaced) return
         // Once newer pages have been evicted, don't stitch distant live messages onto old history.
         // The explicit Latest action restores a contiguous newest window from TDLib.
-        if (event && !atLatest && message.id !in window && message.id > (window.keys.maxOrNull() ?: 0)) return
+        val newNewest = message.id !in window && message.id > (window.keys.maxOrNull() ?: 0)
+        if (event && newNewest && !viewportNearLatest && window.size >= WINDOW) {
+            atLatest = false
+            historyState.update { it.copy(atLatest = false) }
+        }
+        if (event && !atLatest && newNewest) return
         val record = records[message.chatId]
         if (record != null && access[record.peerId to record.supergroup]?.restricted == true) return
         if (event) { revision++; versions[message.id] = revision }
@@ -119,7 +132,8 @@ class SessionChatRepository(
     private fun publishMessages(older: Boolean = false) {
         val ordered = window.values.sortedBy { it.id }
         if (older && ordered.size > WINDOW) atLatest = false
-        val bounded = if (older) ordered.take(WINDOW) else ordered.takeLast(WINDOW)
+        val bounded = if (older || !atLatest) ordered.take(WINDOW) else ordered.takeLast(WINDOW)
+        historyState.update { it.copy(atLatest = atLatest) }
         window.keys.retainAll(bounded.mapTo(mutableSetOf()) { it.id })
         visibleReads.retainAll(window.keys)
         if (versions.size > WINDOW * 3) versions.keys.retainAll(window.keys)
@@ -142,11 +156,19 @@ class SessionChatRepository(
                 if (active == update.id) { window.replaceAll { _, message -> normalize(message) }; publishMessages() }
             }
             is ChatUpdate.Upsert -> if (active == update.message.chatId) {
+                val fresh = update.isNew && update.message.id !in seenArrivals && update.message.id !in window
+                val follow = viewportNearLatest && !viewportScrolling && atLatest
                 update.oldId?.takeIf { it != update.message.id }?.let { old ->
                     replaced += old; if (replaced.size > WINDOW * 3) replaced.remove(replaced.first())
                     window.remove(old)
                 }
                 put(update.message); publishMessages()
+                if (fresh) {
+                    seenArrivals += update.message.id
+                    while (seenArrivals.size > WINDOW * 3) seenArrivals.remove(seenArrivals.first())
+                    arrivalEvents.tryEmit(MessageArrival(epoch, update.message.chatId, update.message.id, update.message.outgoing,
+                        follow, update.message.outgoing && update.message.delivery == Delivery.Sending))
+                }
             }
             is ChatUpdate.Content -> {
                 if (records[update.chatId]?.let { it.lastMessageId == update.messageId && !it.lastRestricted } == true)
@@ -207,7 +229,7 @@ class SessionChatRepository(
     }
     override fun openConversation(chatId: Long) {
         if (!live || active == chatId) return
-        val old = active; active = chatId; atLatest = true; historyGeneration++; historyJob?.cancel()
+        val old = active; active = chatId; atLatest = true; viewportNearLatest = true; viewportScrolling = false; seenArrivals.clear(); historyGeneration++; historyJob?.cancel()
         window.clear(); versions.clear(); replaced.clear(); visibleReads.clear(); messageState.value = emptyList()
         historyState.value = HistoryState(chatId)
         sessionScope?.launch { try { old?.let { client.closeChat(it) }; client.openChat(chatId) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {} }
@@ -236,16 +258,16 @@ class SessionChatRepository(
         val from = window.keys.minOrNull() ?: 0
         val startedAt = revision
         historyJob = sessionScope?.launch {
-            historyState.value = HistoryState(chatId, loading = true)
+            historyState.value = HistoryState(chatId, loading = true, atLatest = atLatest)
             try {
                 val page = client.history(chatId, from, PAGE)
                 ensureActive(); if (generation != historyGeneration) return@launch
                 val newIds = page.any { it.id != from && it.id !in window && it.id !in replaced }
                 page.forEach { message -> if ((versions[message.id] ?: 0) <= startedAt) put(message, event = false) }
                 publishMessages(older = from != 0L)
-                historyState.value = HistoryState(chatId, hasMore = newIds)
+                historyState.value = HistoryState(chatId, hasMore = newIds, atLatest = atLatest)
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { if (generation == historyGeneration) historyState.value = HistoryState(chatId, error = "Unable to load messages. Tap to retry.") }
+            catch (_: Exception) { if (generation == historyGeneration) historyState.value = HistoryState(chatId, error = "Unable to load messages. Tap to retry.", atLatest = atLatest) }
         }
     }
     override suspend fun send(chatId: Long, text: String, replyTo: Long?, attachment: Attachment?): SendResult {

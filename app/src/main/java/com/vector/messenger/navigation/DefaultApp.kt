@@ -28,6 +28,7 @@ import com.vector.messenger.design.DefaultAction
 import com.vector.messenger.design.DefaultDesign
 import com.vector.messenger.design.DefaultDialog
 import com.vector.messenger.design.DefaultHeader
+import com.vector.messenger.design.ConversationHeaderSubtitle
 import com.vector.messenger.design.DefaultIconControl
 import com.vector.messenger.design.VectorMotionSpec
 import com.vector.messenger.design.backdropBlur
@@ -92,6 +93,12 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
     val allChats by chats.chats.collectAsStateWithLifecycle()
     val chatStatus by chats.status.collectAsStateWithLifecycle()
     val contact = allChats.find { it.id == entry?.arguments?.getLong("chatId") }
+    val subtitleSource = remember(entry?.id, contact?.userId, contact?.kind, chatStatus.session, chatStatus.live) {
+        if (conversation && chatStatus.live && contact != null) chats.subtitle(contact.id, contact.userId, contact.kind)
+        else kotlinx.coroutines.flow.flowOf(com.vector.core.ConversationSubtitle(if (chatStatus.live) "Telegram" else "Sample conversation"))
+    }
+    val contactActivity by subtitleSource.collectAsStateWithLifecycle(initialValue = com.vector.core.ConversationSubtitle())
+    LaunchedEffect(entry?.id, contact?.userId, chatStatus.session) { if (conversation && chatStatus.live) chats.observePresence(contact?.userId) }
     val gesture = remember { VectorGestureController() }
     val exclusions = remember { GestureExclusions() }
     val touchExploration = rememberTouchExplorationEnabled()
@@ -176,6 +183,7 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                                     else -> "Connecting to Telegram…"
                                 }
                             } else "",
+                        subtitleContent = if (conversation) ({ ConversationHeaderSubtitle(contactActivity) }) else null,
                         avatarName = if (conversation) contact?.title else null,
                         avatarPhoto = if (conversation) contact?.photo else null,
                         avatarId = if (conversation) contact?.let { it.userId ?: it.id } ?: 0 else 0,

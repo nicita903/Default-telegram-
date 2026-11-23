@@ -47,6 +47,9 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
     private val storyTypes = setOf("updateStory", "updateStoryDeleted", "updateStoryPostSucceeded", "updateStoryPostFailed", "updateChatActiveStories", "updateFile")
     private val storyEvents = MutableSharedFlow<AvatarEnvelope>(extraBufferCapacity = 64)
     internal val storyUpdates = storyEvents.asSharedFlow().filter { it.epoch == sessionEpoch && authorized }.map { it.value }
+    private val activityTypes = setOf("updateUserStatus", "updateUser", "updateChatAction", "updateNewMessage")
+    private val activityEvents = MutableSharedFlow<AvatarEnvelope>(extraBufferCapacity = 128)
+    internal val activityUpdates = activityEvents.asSharedFlow().filter { it.epoch == sessionEpoch && authorized }.map { it.value }
     private val mediaTypes = setOf("updateFile", "updateFileAddedToDownloads", "updateFileDownload", "updateFileRemovedFromDownloads")
     private val actionTargets = ConcurrentHashMap<Long, Long>()
     @Volatile private var actionPolicy: (Long, String) -> Boolean = { _, action -> action == "chatActionCancel" }
@@ -125,6 +128,7 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                         }
                         if (authorized && json.optString("@type") in messagingTypes) messagingEvents.send(MessagingEnvelope(sessionEpoch, json))
                         if (authorized && json.optString("@type") in mediaTypes) mediaEvents.emit(json)
+                        if (authorized && json.optString("@type") in activityTypes) activityEvents.emit(AvatarEnvelope(sessionEpoch, json))
                         if (authorized && json.optString("@type") in storyTypes) storyEvents.emit(AvatarEnvelope(sessionEpoch, json))
                         if (authorized && json.optString("@type") in avatarTypes) avatarEvents.emit(AvatarEnvelope(sessionEpoch, json))
                         if (authorized && (json.optString("@type") == "updateUserPrivacySettingRules" || json.optString("@type") == "updateUser")) ghostEvents.emit(json)

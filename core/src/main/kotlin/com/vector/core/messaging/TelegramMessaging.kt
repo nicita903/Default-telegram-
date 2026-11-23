@@ -19,7 +19,7 @@ sealed interface ChatUpdate {
     data class ReadOutbox(val id: Long, val lastId: Long) : ChatUpdate
     data class Permissions(val id: Long, val canSend: Boolean, val canSendPhotos: Boolean = canSend, val canSendDocuments: Boolean = canSend) : ChatUpdate
     data class Protection(val id: Long, val protected: Boolean) : ChatUpdate
-    data class Upsert(val message: Message, val oldId: Long? = null) : ChatUpdate
+    data class Upsert(val message: Message, val oldId: Long? = null, val isNew: Boolean = false) : ChatUpdate
     data class Content(val chatId: Long, val messageId: Long, val text: String, val media: com.vector.core.media.TelegramMedia? = null) : ChatUpdate
     data class Deleted(val chatId: Long, val ids: List<Long>) : ChatUpdate
     data class Reactions(val chatId: Long, val messageId: Long, val reactions: List<MessageReaction>) : ChatUpdate

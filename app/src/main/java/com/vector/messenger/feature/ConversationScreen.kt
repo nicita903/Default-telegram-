@@ -88,10 +88,10 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
     var qualityName by rememberSaveable(chatId, status.session) { mutableStateOf(PhotoQuality.STANDARD.name) }
     val photoQuality = PhotoQuality.valueOf(qualityName)
     var photoAccessError by remember(chatId, status.session) { mutableStateOf<String?>(null) }
-    val listState = rememberLazyListState()
+    val listState = key(chatId, status.session) { rememberLazyListState() }
     val headerInset = LocalConversationHeaderInset.current
     val visibleTop = with(LocalDensity.current) { headerInset.toPx() }
-    var previousLastId by rememberSaveable(chatId, status.session) { mutableStateOf<Long?>(null) }
+    val autoScroll = rememberConversationScroll(chatId, status.session, listState, viewModel, messages, history)
     val context = LocalContext.current
     val attachmentKeyboard = LocalSoftwareKeyboardController.current
     val mediaViewModel = LocalMediaViewModel.current
@@ -102,7 +102,7 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
     val recording = voiceState.chatId == chatId && voiceState.phase != com.vector.core.audio.RecordingPhase.Idle &&
         voiceState.phase != com.vector.core.audio.RecordingPhase.Failed && voiceState.phase != com.vector.core.audio.RecordingPhase.Uncertain
     LaunchedEffect(voiceViewModel, chatId, status.session) {
-        voiceViewModel?.accepted?.collect { accepted -> if (accepted.chatId == chatId && replyTo == accepted.replyTo) replyTo = null }
+        voiceViewModel?.accepted?.collect { accepted -> if (accepted.chatId == chatId) { viewModel.requestLatest(chatId); if (replyTo == accepted.replyTo) replyTo = null } }
     }
     var mediaSelection by rememberSaveable(chatId, status.session) { mutableStateOf<Long?>(null) }
     val toolRequest by viewModel.chatTool.collectAsStateWithLifecycle()
@@ -163,18 +163,10 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
             originalPermission.launch(android.Manifest.permission.ACCESS_MEDIA_LOCATION)
         } else submitSelectedPhotos()
     }
-    LaunchedEffect(messages.lastOrNull()?.id) {
-        val last = messages.lastOrNull() ?: return@LaunchedEffect
-        if (last.id != previousLastId) {
-            // Inserting at index 0 changes canScrollBackward before this effect runs. Use the
-            // message identity instead, so a sent bubble stays visible with the keyboard open.
-            // Older-page eviction lowers the newest ID and must not pull the reader away.
-            if (previousLastId == null || (last.outgoing && last.id > (previousLastId ?: 0))) listState.scrollToItem(0)
-            previousLastId = last.id
-        }
-    }
+    LaunchedEffect(recording, editId) { if (recording || editId != null) viewModel.stopTyping(chatId, notify = !recording) }
     Column(Modifier.fillMaxSize().designCanvas(colors.canvas).imePadding()) {
-        LazyColumn(state = listState, reverseLayout = true, modifier = Modifier.weight(1f).conversationMessageDissolve().testTag("message_list"),
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+        LazyColumn(state = listState, reverseLayout = true, modifier = Modifier.fillMaxSize().conversationMessageDissolve().testTag("message_list"),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = headerInset + 20.dp, bottom = 20.dp)) {
             itemsIndexed(newestFirst, key = { _, it -> it.id }, contentType = { _, _ -> "message" }) { index, message ->
                 val outgoing = message.outgoing
@@ -218,11 +210,24 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
                 }
             }
         }
+        androidx.compose.animation.AnimatedVisibility(visible = autoScroll.pending > 0 || !history.atLatest,
+            modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 10.dp),
+            enter = VectorMotionSpec.searchEnter(LocalAppearance.current), exit = VectorMotionSpec.searchExit(LocalAppearance.current)) {
+            Box(Modifier.clip(RoundedCornerShape(16.dp)).background(colors.raised.copy(alpha = .94f)).excludeModuleGestures()
+                .clickable(role = Role.Button, onClickLabel = "Go to latest messages") { autoScroll.latest() }.padding(horizontal = 14.dp, vertical = 9.dp)) {
+                Text(if (autoScroll.pending > 0) "↓ ${autoScroll.pending} new messages" else "↓ Latest messages", color = colors.accent, style = MaterialTheme.typography.labelLarge)
+            }
+        }
+        }
         val reply = byId[replyTo]
         val editingMessage = editId
         AdaptiveMessageInput(
             chatId = chatId, replyTo = replyTo, value = if (editId != null) editDraft else draft,
-            onValueChange = { fileError = null; if (editId != null) editDraft = it else draft = it },
+            onValueChange = { value ->
+                fileError = null
+                if (editId != null) editDraft = value
+                else { if (draft.text != value.text && !recording && chat?.canSend != false) viewModel.composing(chatId, value.text); draft = value }
+            },
             live = status.live, enabled = !status.live || chat?.canSend == true,
             busy = busy, recording = recording, editing = editId != null,
             contextTitle = if (editId != null) "EDITING MESSAGE" else reply?.let {
@@ -242,6 +247,7 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
             },
             attachmentsEnabled = !status.live || chat?.canSendPhotos == true || chat?.canSendDocuments == true,
             onSubmit = submit@ {
+                viewModel.stopTyping(chatId)
                 // A stale check-button callback must never become a new-message send.
                 if (editId != editingMessage) return@submit
                 val editing = editingMessage

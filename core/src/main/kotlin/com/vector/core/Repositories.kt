@@ -16,6 +16,8 @@ interface ChatRepository {
     fun togglePin(chatId: Long)
     val status: StateFlow<ChatStatus> get() = DefaultChatState.status
     val history: StateFlow<HistoryState> get() = DefaultChatState.history
+    val arrivals: kotlinx.coroutines.flow.Flow<MessageArrival> get() = kotlinx.coroutines.flow.emptyFlow()
+    fun reportViewport(chatId: Long, nearLatest: Boolean, scrolling: Boolean) {}
     val reactionError: StateFlow<String?> get() = DefaultChatState.reactionError
     fun loadMoreChats(archived: Boolean = false) {}
     fun openConversation(chatId: Long) {}
@@ -30,7 +32,7 @@ interface ChatRepository {
 data class ChatStatus(val live: Boolean = false, val session: Long = 0, val loading: Boolean = false,
     val mainMore: Boolean = false, val archiveMore: Boolean = false, val error: String? = null,
     val connection: com.vector.core.profile.ProfileConnection = com.vector.core.profile.ProfileConnection.Connecting)
-data class HistoryState(val chatId: Long? = null, val loading: Boolean = false, val hasMore: Boolean = true, val error: String? = null)
+data class HistoryState(val chatId: Long? = null, val loading: Boolean = false, val hasMore: Boolean = true, val error: String? = null, val atLatest: Boolean = true)
 private object DefaultChatState {
     val reactionError = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     val status = kotlinx.coroutines.flow.MutableStateFlow(ChatStatus())

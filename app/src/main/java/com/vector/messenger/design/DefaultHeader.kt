@@ -22,6 +22,7 @@ fun DefaultHeader(
     trailing: @Composable RowScope.() -> Unit = {},
     avatarName: String? = null, avatarPhoto: com.vector.core.profile.ProfilePhoto? = null,
     avatarId: Long = 0, avatarUser: Boolean = false,
+    subtitleContent: (@Composable () -> Unit)? = null,
 ) {
     val colors = DefaultDesign.colors
     Box(
@@ -54,7 +55,8 @@ fun DefaultHeader(
                 verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(title, style = MaterialTheme.typography.titleLarge, color = colors.text, maxLines = 1,
                     overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
-                if (subtitle.isNotEmpty()) Text(subtitle, style = MaterialTheme.typography.labelSmall,
+                if (subtitleContent != null) subtitleContent()
+                else if (subtitle.isNotEmpty()) Text(subtitle, style = MaterialTheme.typography.labelSmall,
                     color = colors.secondary, maxLines = 1, overflow = TextOverflow.Ellipsis,
                     textAlign = androidx.compose.ui.text.style.TextAlign.Center)
             }
