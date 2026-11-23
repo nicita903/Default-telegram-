@@ -23,7 +23,7 @@ import kotlinx.coroutines.flow.flowOf
 
 /** One session-aware, sampled image cache for every avatar and media thumbnail. */
 @Composable
-fun TelegramAvatar(name: String, photo: ProfilePhoto?, size: Dp, id: Long = 0, user: Boolean = false) {
+fun TelegramAvatar(name: String, photo: ProfilePhoto?, size: Dp, id: Long = 0, user: Boolean = false, onClick: (() -> Unit)? = null) {
     val avatars = LocalAvatarViewModel.current
     val owner = remember(id, user) { AvatarOwner(id, user) }
     key(owner, avatars, avatars?.state?.value?.session) {
@@ -43,10 +43,10 @@ fun TelegramAvatar(name: String, photo: ProfilePhoto?, size: Dp, id: Long = 0, u
                 AvatarDiagnostics.record(AvatarStage.DecodeReady); avatars?.decoded(it.fileId)
             }
         }
-        val interactive = avatars != null && id != 0L && avatars.state.value.authenticated
+        val interactive = onClick != null || (avatars != null && id != 0L && avatars.state.value.authenticated)
         Box(Modifier.size(size).clip(DefaultDesign.avatarShape)
-            .then(if (interactive) Modifier.excludeModuleGestures().clickable(onClickLabel = "View ${display.name} profile photo") {
-                avatars?.open(owner, display.name, display.photo)
+            .then(if (interactive) Modifier.excludeModuleGestures().clickable(onClickLabel = if (onClick != null) "Open profile" else "View ${display.name} profile photo") {
+                if (onClick != null) onClick() else avatars?.open(owner, display.name, display.photo)
             } else Modifier)) {
             if (bitmap == null) ChatAvatar(display.name, size, if (id != 0L) id else name.hashCode().toLong())
             else Image(bitmap!!.bitmap.asImageBitmap(), "${display.name} profile picture", Modifier.size(size), contentScale = ContentScale.Crop)

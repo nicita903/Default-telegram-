@@ -61,6 +61,25 @@ internal object MediaImages {
             }
         }
     }
+    suspend fun loadVideoUri(context: android.content.Context, uri: String, session: Long, edge: Int = 512): DecodedMediaImage? = withContext(Dispatchers.IO) {
+        decoders.withPermit {
+            val key = "post-video:$session:$uri:$edge"
+            cache.get(key)?.let { return@withPermit it }
+            val started = synchronized(this@MediaImages) { generation }
+            val retriever = android.media.MediaMetadataRetriever()
+            try {
+                retriever.setDataSource(context, android.net.Uri.parse(uri))
+                val bitmap = retriever.getScaledFrameAtTime(-1, android.media.MediaMetadataRetriever.OPTION_CLOSEST_SYNC, edge, edge) ?: return@withPermit null
+                ensureActive()
+                DecodedMediaImage(bitmap, bitmap.width, bitmap.height).also { image -> synchronized(this@MediaImages) {
+                    if (started == generation) cache.put(key, image)
+                } }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { null }
+            catch (_: OutOfMemoryError) { cache.evictAll(); null }
+            finally { retriever.release() }
+        }
+    }
     suspend fun load(path: String, edge: Int, session: Long): DecodedMediaImage? = withContext(Dispatchers.IO) {
         decoders.withPermit {
             try {

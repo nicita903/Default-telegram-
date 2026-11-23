@@ -14,11 +14,11 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vector.messenger.design.*
 
 @Composable
-fun OwnAccountAvatar(size: Dp = 44.dp) {
+fun OwnAccountAvatar(size: Dp = 44.dp, onClick: (() -> Unit)? = null) {
     val avatars = LocalAvatarViewModel.current ?: return
     val state by avatars.ownProfile.collectAsStateWithLifecycle()
     val profile = state.profile?.takeIf { state.authenticated } ?: return
-    TelegramAvatar(profile.displayName, profile.photo, size, profile.id, user = true)
+    TelegramAvatar(profile.displayName, profile.photo, size, profile.id, user = true, onClick = onClick)
 }
 
 @Composable

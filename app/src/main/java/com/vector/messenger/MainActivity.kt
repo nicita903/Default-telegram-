@@ -32,6 +32,7 @@ class MainActivity : ComponentActivity() {
     private val authentication: AuthenticationViewModel by viewModels()
     private val profile: ProfileViewModel by viewModels()
     private val avatars: com.vector.messenger.feature.avatar.AvatarViewModel by viewModels()
+    private val profileModule: com.vector.messenger.feature.profile.ProfileModuleViewModel by viewModels()
     private val search: SearchViewModel by viewModels()
     private val media: com.vector.messenger.feature.media.MediaViewModel by viewModels()
     private val audio: com.vector.messenger.feature.audio.AudioViewModel by viewModels()
@@ -60,6 +61,7 @@ class MainActivity : ComponentActivity() {
                 com.vector.messenger.feature.audio.LocalAudioViewModel provides audio,
                 com.vector.messenger.feature.audio.LocalVoiceViewModel provides voice,
                 com.vector.messenger.feature.avatar.LocalAvatarViewModel provides avatars,
+                com.vector.messenger.feature.profile.LocalProfileModuleViewModel provides profileModule,
                 com.vector.messenger.feature.avatar.LocalAccountAction provides { accountOpen = true },
                 com.vector.messenger.feature.music.LocalMusicViewModel provides music) {
             DefaultTheme {

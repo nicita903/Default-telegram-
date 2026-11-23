@@ -9,6 +9,18 @@ import androidx.compose.ui.unit.dp
 
 /** Small code-native line icons; no additional icon dependency. */
 object VectorIcons {
+    val Views by lazy { icon("Views") {
+        moveTo(2f, 12f); curveTo(7f, 3f, 17f, 3f, 22f, 12f); curveTo(17f, 21f, 7f, 21f, 2f, 12f); close()
+        moveTo(15f, 12f); curveTo(15f, 16f, 9f, 16f, 9f, 12f); curveTo(9f, 8f, 15f, 8f, 15f, 12f); close()
+    } }
+    val Heart by lazy { icon("Reactions") {
+        moveTo(12f, 21f); lineTo(3f, 12f); curveTo(-2f, 5f, 7f, -1f, 12f, 6f)
+        curveTo(17f, -1f, 26f, 5f, 21f, 12f); lineTo(12f, 21f); close()
+    } }
+    val Refresh by lazy { icon("Refresh") {
+        moveTo(20f, 9f); curveTo(17f, 1f, 4f, 2f, 3f, 11f); curveTo(2f, 21f, 17f, 25f, 21f, 15f)
+        moveTo(20f, 3f); lineTo(20f, 9f); lineTo(14f, 9f)
+    } }
     val Emoji by lazy { icon("Emoji") {
         moveTo(21f, 12f); curveTo(21f, 17f, 17f, 21f, 12f, 21f); curveTo(7f, 21f, 3f, 17f, 3f, 12f)
         curveTo(3f, 7f, 7f, 3f, 12f, 3f); curveTo(17f, 3f, 21f, 7f, 21f, 12f); close()

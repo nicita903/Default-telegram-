@@ -28,6 +28,8 @@ import com.vector.messenger.design.VectorMotionSpec
 import com.vector.messenger.design.VectorIcons
 import com.vector.messenger.design.*
 import com.vector.messenger.feature.LocalAppearance
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.vector.messenger.feature.avatar.LocalAvatarViewModel
 
 private val AppModule.icon: ImageVector get() = when (this) {
     AppModule.Chats -> VectorIcons.Chat
@@ -46,7 +48,9 @@ private val AppModule.icon: ImageVector get() = when (this) {
  * Dismissal stays on the close control, module selection and Android Back, all owned by the caller.
  */
 @Composable
-fun VectorModuleMenu(open: Boolean, active: AppModule, onDismiss: () -> Unit, onSelect: (AppModule) -> Unit, onAccount: () -> Unit = {}, onSearch: () -> Unit = {}) {
+fun VectorModuleMenu(open: Boolean, active: AppModule, onDismiss: () -> Unit, onSelect: (AppModule) -> Unit, onAccount: () -> Unit = {}, onSearch: () -> Unit = {}, onProfile: () -> Unit = {}) {
+    val account = LocalAvatarViewModel.current?.ownProfile?.collectAsStateWithLifecycle()?.value
+    val identity = account?.profile?.takeIf { account.authenticated }
     val appearance = LocalAppearance.current
     val colors = DefaultDesign.colors
     val scrim = backdropScrim()
@@ -70,12 +74,17 @@ fun VectorModuleMenu(open: Boolean, active: AppModule, onDismiss: () -> Unit, on
             ) {
                 Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 12.dp, top = 14.dp, bottom = 6.dp),
                     verticalAlignment = Alignment.CenterVertically) {
-                    com.vector.messenger.feature.avatar.OwnAccountAvatar(44.dp)
-                    Spacer(Modifier.width(12.dp))
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-                        Text("Default", style = MaterialTheme.typography.headlineSmall, color = colors.text)
-                        Text("Modules", style = MaterialTheme.typography.labelSmall,
-                            color = colors.secondary, modifier = Modifier.semantics { heading() })
+                    Row(Modifier.weight(1f).heightIn(min = 48.dp).clickable(onClickLabel = "Open profile") {
+                        if (identity != null) onProfile() else onAccount()
+                    }, verticalAlignment = Alignment.CenterVertically) {
+                        com.vector.messenger.feature.avatar.OwnAccountAvatar(44.dp, onClick = onProfile)
+                        Spacer(Modifier.width(12.dp))
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                            Text(identity?.displayName ?: "Telegram account", style = MaterialTheme.typography.headlineSmall, color = colors.text, maxLines = 2)
+                            (identity?.username?.let { "@$it" } ?: if (identity == null) "Sign in" else null)?.let {
+                                Text(it, style = MaterialTheme.typography.labelSmall, color = colors.secondary)
+                            }
+                        }
                     }
                     DefaultIconControl(Icons.Default.Close, "Close navigation", onDismiss, quiet = true)
                 }

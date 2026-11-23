@@ -39,11 +39,14 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
     internal val ghostUpdates = ghostEvents.asSharedFlow()
     private val mediaEvents = MutableSharedFlow<JSONObject>(extraBufferCapacity = 64)
     internal val mediaUpdates = mediaEvents.asSharedFlow()
-    private val avatarTypes = setOf("updateUser", "updateChatPhoto", "updateFile")
+    private val avatarTypes = setOf("updateUser", "updateChatPhoto", "updateFile", "updateUserFullInfo")
     private class AvatarEnvelope(val epoch: Long, val value: JSONObject)
     private val avatarEvents = MutableSharedFlow<AvatarEnvelope>(extraBufferCapacity = 64)
     internal val avatarUpdates = avatarEvents.asSharedFlow()
         .filter { it.epoch == sessionEpoch && authorized }.map { it.value }
+    private val storyTypes = setOf("updateStory", "updateStoryDeleted", "updateStoryPostSucceeded", "updateStoryPostFailed", "updateChatActiveStories", "updateFile")
+    private val storyEvents = MutableSharedFlow<AvatarEnvelope>(extraBufferCapacity = 64)
+    internal val storyUpdates = storyEvents.asSharedFlow().filter { it.epoch == sessionEpoch && authorized }.map { it.value }
     private val mediaTypes = setOf("updateFile", "updateFileAddedToDownloads", "updateFileDownload", "updateFileRemovedFromDownloads")
     private val actionTargets = ConcurrentHashMap<Long, Long>()
     @Volatile private var actionPolicy: (Long, String) -> Boolean = { _, action -> action == "chatActionCancel" }
@@ -122,6 +125,7 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                         }
                         if (authorized && json.optString("@type") in messagingTypes) messagingEvents.send(MessagingEnvelope(sessionEpoch, json))
                         if (authorized && json.optString("@type") in mediaTypes) mediaEvents.emit(json)
+                        if (authorized && json.optString("@type") in storyTypes) storyEvents.emit(AvatarEnvelope(sessionEpoch, json))
                         if (authorized && json.optString("@type") in avatarTypes) avatarEvents.emit(AvatarEnvelope(sessionEpoch, json))
                         if (authorized && (json.optString("@type") == "updateUserPrivacySettingRules" || json.optString("@type") == "updateUser")) ghostEvents.emit(json)
                         if (json.optString("@type") != "updateAuthorizationState") continue

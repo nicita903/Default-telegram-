@@ -39,7 +39,7 @@ class VectorNavigationController(initial: VectorModuleHistory) {
 fun rememberVectorNavigationController(): VectorNavigationController = rememberSaveable(
     saver = listSaver(
         save = { it.history.visits.map(AppModule::name) },
-        restore = { VectorNavigationController(VectorModuleHistory(it.map(AppModule::valueOf))) },
+        restore = { VectorNavigationController(VectorModuleHistory(it.mapNotNull { value -> AppModule.entries.find { module -> module.name == value } }.ifEmpty { listOf(AppModule.Chats) } )) },
     ),
 ) { VectorNavigationController(VectorModuleHistory()) }
 
@@ -50,6 +50,10 @@ object Routes {
     const val Downloads = "Downloads"
     const val Privacy = "Privacy"
     const val Settings = "Settings"
+    const val Profile = "Profile"
+    const val ProfileEdit = "profile/edit"
+    const val NewPost = "profile/new-post"
+    const val Post = "profile/post/{postId}"
     const val Conversation = "conversation/{chatId}"
     const val MusicSection = "library/{section}"
     val main = AppModule.entries.map { it.name }

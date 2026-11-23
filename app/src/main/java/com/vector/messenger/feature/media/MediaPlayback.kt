@@ -25,7 +25,7 @@ import kotlinx.coroutines.*
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
-internal fun VideoMedia(path: String, fileId: Int, looping: Boolean) {
+internal fun VideoMedia(path: String, fileId: Int, looping: Boolean, contentPadding: PaddingValues = PaddingValues(top = 80.dp, bottom = 145.dp), viewportModifier: Modifier = Modifier) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
     var savedPosition by rememberSaveable(fileId) { mutableLongStateOf(0) }
@@ -66,10 +66,12 @@ internal fun VideoMedia(path: String, fileId: Int, looping: Boolean) {
             delay(250) // Playback clock only; file progress is event-driven.
         }
     }
-    Column(Modifier.fillMaxSize().padding(top = 80.dp, bottom = 145.dp)) {
-        AndroidView(factory = { PlayerView(it).apply { this.player = player; useController = false } },
-            update = { it.player = player }, modifier = Modifier.weight(1f).fillMaxWidth(),
-            onRelease = { it.player = null })
+    Column(Modifier.fillMaxSize().padding(contentPadding)) {
+        Box(Modifier.weight(1f).fillMaxWidth()) {
+            AndroidView(factory = { PlayerView(it).apply { this.player = player; useController = false } },
+                update = { it.player = player }, modifier = Modifier.fillMaxSize(), onRelease = { it.player = null })
+            Box(Modifier.matchParentSize().then(viewportModifier))
+        }
         if (failed) Text("This media format cannot be played. Try opening it in another application.", color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(12.dp))
         Column(Modifier.padding(horizontal = 20.dp)) {
             Slider(value = if (seeking) seekTarget else position.toFloat().coerceIn(0f, duration.toFloat().coerceAtLeast(1f)),

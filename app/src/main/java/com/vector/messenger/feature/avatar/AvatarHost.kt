@@ -31,12 +31,14 @@ fun AvatarHost(avatars: AvatarViewModel, chats: ChatsViewModel) {
     val viewing by avatars.viewer.collectAsStateWithLifecycle()
     val cache by avatars.state.collectAsStateWithLifecycle()
     val edit by avatars.edit.collectAsStateWithLifecycle()
+    val selectPhoto by avatars.photoSelection.collectAsStateWithLifecycle()
     val current = viewing ?: return
     var gallery by rememberSaveable(cache.session, current.identity.owner) { mutableStateOf(false) }
     var selection by rememberSaveable(cache.session, current.identity.owner) { mutableStateOf(arrayListOf<String>()) }
     var crop by rememberSaveable(cache.session, current.identity.owner) { mutableStateOf<String?>(null) }
     var completed by rememberSaveable(cache.session, current.identity.owner) { mutableIntStateOf(edit.completed) }
     LaunchedEffect(edit.completed) { if (completed != edit.completed) { completed = edit.completed; gallery = false; crop = null } }
+    LaunchedEffect(selectPhoto) { if (selectPhoto && avatars.isOwn(current.identity)) { gallery = true; avatars.consumePhotoSelection() } }
     key(cache.session, current.identity.owner) { AvatarViewerDialog(avatars, current, cache, edit) { gallery = true } }
     if (gallery) PhotoGalleryPanel(chats, selection, PhotoQuality.HD, edit.busy, false, edit.error,
         onSelection = { selection = ArrayList(it) }, onPreview = { selection = arrayListOf(it); crop = it },

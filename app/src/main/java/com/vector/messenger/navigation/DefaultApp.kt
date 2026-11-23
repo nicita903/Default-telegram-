@@ -34,6 +34,7 @@ import com.vector.messenger.design.backdropBlur
 import com.vector.messenger.design.LocalConversationHeaderInset
 import androidx.compose.ui.platform.LocalLayoutDirection
 import com.vector.messenger.feature.*
+import com.vector.messenger.feature.profile.*
 import com.vector.messenger.navigation.gesture.*
 import kotlinx.coroutines.launch
 import com.vector.messenger.feature.search.*
@@ -55,15 +56,19 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
     // Search opened from another module can reveal Chats without recording a module visit.
     // The first subsequent module Back returns to the unchanged visit-history head.
     var transientChats by rememberSaveable { mutableStateOf(false) }
+    var profileOpen by rememberSaveable { mutableStateOf(false) }
+    val profileNav = rememberNavController()
+    fun openProfile() { if (!profileOpen) { profileNav.popBackStack(Routes.Profile, false); profileOpen = true } }
+    fun profileBack() { if (profileNav.previousBackStackEntry != null) profileNav.popBackStack() else profileOpen = false }
     val displayedModule = if (transientChats) AppModule.Chats else navigation.module
-    val nav = controllers.getValue(displayedModule)
+    val nav = if (profileOpen) profileNav else controllers.getValue(displayedModule)
     val entry by nav.currentBackStackEntryAsState()
     val route = entry?.destination?.route
     val conversation = route == Routes.Conversation
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var searchScopeName by rememberSaveable { mutableStateOf(SearchScope.Chats.name) }
     val searchScope = SearchScope.valueOf(searchScopeName)
-    val searchVisible = searchOpen && displayedModule == AppModule.Chats && !conversation
+    val searchVisible = !profileOpen && searchOpen && displayedModule == AppModule.Chats && !conversation
     val searchVisibility = remember { MutableTransitionState(false) }.apply { targetState = searchVisible }
     val searchOwnsInput = searchVisible || searchVisibility.currentState || searchVisibility.targetState
     val keyboard = LocalSoftwareKeyboardController.current
@@ -71,6 +76,7 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
     val view = LocalView.current
     fun closeSearch() { keyboard?.hide(); focusManager.clearFocus(); searchOpen = false }
     val appearance = LocalAppearance.current
+    val profileModule = LocalProfileModuleViewModel.current
     val chatQuery by search.chatQuery.collectAsStateWithLifecycle()
     val musicQuery by search.musicQuery.collectAsStateWithLifecycle()
     var blockedAttempt by remember { mutableIntStateOf(0) }
@@ -126,10 +132,12 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
     val release: (VectorGestureDirection) -> Unit = { direction ->
         // Read live policy too: a state change can precede the next composition/input restart.
         if (modulePolicy() == GestureCancelReason.None) {
-            if (direction == VectorGestureDirection.Right) menu = true else previousModule()
+            if (direction == VectorGestureDirection.Right) menu = true
+            else if (profileOpen) profileBack()
+            else previousModule()
         }
     }
-    com.vector.messenger.design.MusicPalette(enabled = displayedModule == AppModule.Music) {
+    com.vector.messenger.design.MusicPalette(enabled = !profileOpen && displayedModule == AppModule.Music) {
     CompositionLocalProvider(LocalGestureExclusions provides exclusions) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
             .vectorModuleGestures(gesture, modulePolicy, release, config = gestureConfig, haptics = appearance.haptics,
@@ -147,16 +155,20 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                 contentWindowInsets = WindowInsets.safeDrawing,
                 snackbarHost = { SnackbarHost(snackbar) },
                 bottomBar = { if (!searchOwnsInput) com.vector.messenger.feature.audio.FloatingAudioPlayer { chatId ->
-                    closeSearch(); menu = false
+                    closeSearch(); menu = false; profileOpen = false
                     if (navigation.module != AppModule.Chats) transientChats = true
                     chats.open(chatId)
                     controllers.getValue(AppModule.Chats).navigate(Routes.conversation(chatId)) { launchSingleTop = true }
                 } },
                 topBar = { if (!searchOwnsInput) {
-                    val internalBack = nav.previousBackStackEntry != null
+                    val internalBack = profileOpen || nav.previousBackStackEntry != null
                     DefaultHeader(
-                        title = if (conversation) contact?.title ?: "Conversation" else if (displayedModule == AppModule.Chats) "DEFAULT" else displayedModule.label,
-                        subtitle = if (conversation) { if (chatStatus.live) "Telegram" else "Sample conversation" }
+                        title = if (profileOpen && route == Routes.ProfileEdit) "EDIT PROFILE"
+                            else if (profileOpen && route == Routes.NewPost) "NEW POST"
+                            else if (profileOpen && route == Routes.Post) "POST"
+                            else if (profileOpen) "PROFILE"
+                            else if (conversation) contact?.title ?: "Conversation" else if (displayedModule == AppModule.Chats) "DEFAULT" else displayedModule.label,
+                        subtitle = if (profileOpen) "" else if (conversation) { if (chatStatus.live) "Telegram" else "Sample conversation" }
                             else if (searchVisible) "Search workspace" else if (displayedModule == AppModule.Chats) {
                                 if (!chatStatus.live) "Demo chats · not synchronized" else when (chatStatus.connection) {
                                     com.vector.core.profile.ProfileConnection.Ready -> "Telegram"
@@ -172,8 +184,8 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                         leading = {
                             if (internalBack || searchVisible) {
                                 DefaultIconControl(Icons.AutoMirrored.Filled.ArrowBack,
-                                    if (searchVisible) "Close search" else if (conversation && displayedModule == AppModule.Contacts) "Back to contacts" else if (conversation) "Back to chats" else "Back within module",
-                                    { if (searchVisible) closeSearch() else nav.popBackStack() },
+                                    if (profileOpen) "Back from profile" else if (searchVisible) "Close search" else if (conversation && displayedModule == AppModule.Contacts) "Back to contacts" else if (conversation) "Back to chats" else "Back within module",
+                                    { if (searchVisible) closeSearch() else if (profileOpen) profileBack() else nav.popBackStack() },
                                     Modifier.excludeModuleGestures(), quiet = true)
                             } else {
                                 DefaultIconControl(Icons.Default.Menu, "Open navigation", { menu = true },
@@ -181,7 +193,15 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                             }
                         },
                         trailing = {
-                            if (conversation && contact != null) com.vector.messenger.feature.ConversationOptions(contact, chats)
+                            if (profileOpen) {
+                                val editor = profileModule
+                                if (route == Routes.NewPost && editor != null) {
+                                    val posting by editor.state.collectAsStateWithLifecycle()
+                                    DefaultAction(if (posting.posting) "Saving…" else "Post", editor::publish,
+                                        Modifier.excludeModuleGestures(), compact = true, enabled = !posting.posting)
+                                }
+                            }
+                            else if (conversation && contact != null) com.vector.messenger.feature.ConversationOptions(contact, chats)
                             else if (internalBack && !conversation) DefaultIconControl(Icons.Default.Menu, "Open navigation", { menu = true },
                                 Modifier.excludeModuleGestures(), quiet = true)
                             else if (!conversation && displayedModule == AppModule.Chats) DefaultIconControl(Icons.Default.Add, "New chat", { newMessage = true },
@@ -201,19 +221,21 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                 Box(Modifier.fillMaxSize().padding(bodyPadding).consumeWindowInsets(padding)
                     .moduleGestureSurface(gesture, ModuleGestureSurface.Content).testTag("module_gesture_surface")) {
                     AnimatedContent(
-                        targetState = displayedModule,
+                        targetState = profileOpen to displayedModule,
                         transitionSpec = {
                             VectorMotionSpec.moduleTransition(navigation.backwards, appearance).using(null)
                         }, label = "Module transition",
-                    ) { module ->
-                        holder.SaveableStateProvider(module.name) {
+                    ) { destination ->
+                        val module = destination.second
+                        holder.SaveableStateProvider(if (destination.first) "AccountProfile" else module.name) {
                             Box(Modifier.fillMaxSize()) {
                                 // Keep the same Chats entry/list alive underneath Search.
                                 Box(Modifier.fillMaxSize().then(if (module == AppModule.Chats && searchOwnsInput) Modifier.clearAndSetSemantics {} else Modifier)) {
-                                    VectorNavigationHost(module, controllers.getValue(module), chats, preferences,
+                                    if (destination.first) ProfileNavigationHost(profileNav)
+                                    else VectorNavigationHost(module, controllers.getValue(module), chats, preferences,
                                         onPrivacy = { transientChats = false; navigation.select(AppModule.Privacy) }, onSearch = { searchScopeName = SearchScope.Chats.name; searchOpen = true })
                                 }
-                                if (module == AppModule.Chats) SearchOverlay(searchVisibility, searchVisible && !menu && !floatingInterface && !touchExploration,
+                                if (!destination.first && module == AppModule.Chats) SearchOverlay(searchVisibility, searchVisible && !menu && !floatingInterface && !touchExploration,
                                     search, searchScope, blockedAttempt, ::switchSearch, ::closeSearch) { id ->
                                     closeSearch(); chats.open(id); controllers.getValue(AppModule.Chats).navigate(Routes.conversation(id)) { launchSingleTop = true }
                                 }
@@ -226,8 +248,11 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
             // Feedback overlay for the same gesture: it consumes no pointer input and sets no semantics.
             AuroraGestureCue(gesture.state, gesture.direction, appearance.hold)
             // System Back pops an internal screen first, then visit history. At the first root Android exits.
-            BackHandler(enabled = !menu && (searchVisible || transientChats || nav.previousBackStackEntry != null || navigation.history.canGoBack)) {
-                if (searchVisible) {
+            BackHandler(enabled = !menu && (profileOpen || searchVisible || transientChats || nav.previousBackStackEntry != null || navigation.history.canGoBack)) {
+                if (profileOpen) {
+                    if (ViewCompat.getRootWindowInsets(view)?.isVisible(WindowInsetsCompat.Type.ime()) == true) { keyboard?.hide(); focusManager.clearFocus() }
+                    else profileBack()
+                } else if (searchVisible) {
                     // Query the current platform state in the callback, not a Boolean captured
                     // before the IME's asynchronous hide animation/insets delivery.
                     if (ViewCompat.getRootWindowInsets(view)?.isVisible(WindowInsetsCompat.Type.ime()) == true) {
@@ -235,7 +260,8 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                     } else closeSearch()
                 } else if (nav.previousBackStackEntry != null) nav.popBackStack() else previousModule()
             }
-            VectorModuleMenu(menu, displayedModule, onDismiss = { menu = false }, onSelect = { transientChats = false; navigation.select(it); menu = false }, onAccount = { menu = false; onAccount() }, onSearch = {
+            VectorModuleMenu(menu, displayedModule, onDismiss = { menu = false }, onSelect = { profileOpen = false; transientChats = false; navigation.select(it); menu = false }, onAccount = { menu = false; onAccount() }, onProfile = { menu = false; openProfile() }, onSearch = {
+                profileOpen = false
                 if (displayedModule != AppModule.Chats) transientChats = true
                 controllers.getValue(AppModule.Chats).popBackStack(AppModule.Chats.name, false)
                 searchScopeName = SearchScope.Chats.name; searchOpen = true; menu = false
@@ -289,6 +315,27 @@ private fun VectorNavigationHost(
             AppModule.Downloads -> composable(module.name) { DownloadsScreen() }
             AppModule.Privacy -> composable(module.name) { PrivacyScreen(allChats.filter { it.isContact }, preferences) }
             AppModule.Settings -> composable(module.name) { SettingsScreen(preferences, onPrivacy) }
+
+        }
+    }
+}
+
+@Composable
+private fun ProfileNavigationHost(nav: androidx.navigation.NavHostController) {
+    val appearance = LocalAppearance.current
+    NavHost(navController = nav, startDestination = Routes.Profile,
+        enterTransition = { VectorMotionSpec.screenEnter(appearance) }, exitTransition = { VectorMotionSpec.screenExit(appearance) },
+        popEnterTransition = { VectorMotionSpec.screenEnter(appearance, backwards = true) }, popExitTransition = { VectorMotionSpec.screenExit(appearance, backwards = true) }) {
+        composable(Routes.Profile) {
+            ProfileModuleHome(requireNotNull(LocalProfileModuleViewModel.current),
+                onEdit = { nav.navigate(Routes.ProfileEdit) { launchSingleTop = true } },
+                onNew = { nav.navigate(Routes.NewPost) { launchSingleTop = true } },
+                onPost = { nav.navigate("profile/post/$it") { launchSingleTop = true } })
+        }
+        composable(Routes.ProfileEdit) { EditProfileScreen(requireNotNull(LocalProfileModuleViewModel.current)) { nav.popBackStack() } }
+        composable(Routes.NewPost) { NewPostScreen(requireNotNull(LocalProfileModuleViewModel.current)) { nav.popBackStack() } }
+        composable(Routes.Post, arguments = listOf(navArgument("postId") { type = NavType.StringType })) { entry ->
+            TelegramPostScreen(requireNotNull(LocalProfileModuleViewModel.current), entry.arguments!!.getString("postId")!!.toInt()) { nav.popBackStack() }
         }
     }
 }

@@ -32,6 +32,15 @@ data class AvatarMembersState(val entries: List<AvatarIdentity> = emptyList(), v
 class AvatarViewModel @Inject constructor(auth: AuthenticationRepository, private val client: TdlibAvatarClient,
     private val profiles: ProfileRepository, private val store: PhotoUploadStore) : ViewModel() {
     val ownProfile = profiles.state
+    private val selection = MutableStateFlow(false)
+    val photoSelection = selection.asStateFlow()
+    fun consumePhotoSelection() { selection.value = false }
+    fun changeOwnPhoto() {
+        val own = ownProfile.value.profile?.takeIf { ownProfile.value.authenticated } ?: return
+        if (edit.value.busy) return
+        open(AvatarOwner(own.id), own.displayName, own.photo)
+        selection.value = true
+    }
     private val mutable = MutableStateFlow(AvatarCache())
     val state = mutable.asStateFlow()
     private val viewing = MutableStateFlow<AvatarViewerState?>(null)
@@ -61,7 +70,7 @@ class AvatarViewModel @Inject constructor(auth: AuthenticationRepository, privat
             auth.state.map { it.step == AuthStep.Ready }.distinctUntilChanged().collectLatest { ready ->
                 identities.clear(); files.clear(); fileRevisions.clear(); resolving.clear(); resolved.clear(); identityRevisions.clear(); downloads.clear(); retryAt.clear(); decodeFailures.clear(); viewerToken++
                 viewing.value = null; editing.value = AvatarEditState(); uploadFile = 0; uploadPath = null; MediaImages.clear()
-                memberState.value = AvatarMembersState()
+                memberState.value = AvatarMembersState(); selection.value = false
                 mutable.value = AvatarCache(ready, mutable.value.session + 1)
                 if (ready) coroutineScope {
                     scope = this
@@ -230,7 +239,7 @@ class AvatarViewModel @Inject constructor(auth: AuthenticationRepository, privat
             catch (_: Exception) { if (token == viewerToken) viewing.update { it?.copy(loading = false, error = "Unable to load this profile. Refresh when connected.") } }
         }
     }
-    fun close() { if (!edit.value.busy) { viewerToken++; viewerJob?.cancel(); historyJob?.cancel(); memberJob?.cancel(); viewing.value = null } }
+    fun close() { if (!edit.value.busy) { viewerToken++; viewerJob?.cancel(); historyJob?.cancel(); memberJob?.cancel(); viewing.value = null; selection.value = false } }
     fun refresh() { profiles.refresh(); viewer.value?.identity?.let { open(it.owner, it.name, it.small, confirmedRefresh = true) } }
     fun loadMembers() {
         val current = memberState.value
