@@ -27,6 +27,9 @@ import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
+    @javax.inject.Inject lateinit var notifications: com.vector.messenger.notifications.TelegramNotifications
+    override fun onStart() { super.onStart(); notifications.foreground = true; notifications.refreshPushToken() }
+    override fun onStop() { notifications.foreground = false; super.onStop() }
     private val chats: ChatsViewModel by viewModels()
     private val preferences: PreferencesViewModel by viewModels()
     private val authentication: AuthenticationViewModel by viewModels()
@@ -39,11 +42,12 @@ class MainActivity : ComponentActivity() {
     private val voice: com.vector.messenger.feature.audio.VoiceViewModel by viewModels()
     private val music: com.vector.messenger.feature.music.MusicViewModel by viewModels()
     override fun onNewIntent(intent: android.content.Intent) {
-        super.onNewIntent(intent); setIntent(intent)
+        super.onNewIntent(intent); setIntent(intent); notifications.accept(intent)
         if (intent.getBooleanExtra("open_music_player", false)) music.openPlayer()
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        notifications.accept(intent)
         enableEdgeToEdge()
         val account = authentication // Starts/restores the process-owned Telegram session asynchronously.
         setContent {
@@ -65,7 +69,7 @@ class MainActivity : ComponentActivity() {
                 com.vector.messenger.feature.avatar.LocalAccountAction provides { accountOpen = true },
                 com.vector.messenger.feature.music.LocalMusicViewModel provides music) {
             DefaultTheme {
-                DefaultApp(chats, preferences, search, onAccount = { accountOpen = true })
+                DefaultApp(chats, preferences, search, onAccount = { accountOpen = true }, notificationHost = notifications)
                 com.vector.messenger.feature.audio.AudioLifecycle()
                 com.vector.messenger.feature.music.NowPlayingHost()
                 androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) { music.refresh() }

@@ -11,6 +11,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.State
 import androidx.compose.ui.Alignment
@@ -40,7 +42,9 @@ private val DriftTravel = 54.dp
 @Composable
 fun AuroraField(modifier: Modifier = Modifier) {
     val appearance = LocalAppearance.current
-    val moving = !appearance.reducedMotion && appearance.intensity > 0
+    var active by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    androidx.lifecycle.compose.LifecycleStartEffect(Unit) { active = true; onStopOrDispose { active = false } }
+    val moving = active && !appearance.reducedMotion && appearance.intensity > 0
     val drift = if (moving) rememberInfiniteTransition(label = "Aurora field").animateFloat(
         initialValue = 0f, targetValue = 1f,
         animationSpec = infiniteRepeatable(tween(DriftMillis, easing = LinearEasing), RepeatMode.Reverse),

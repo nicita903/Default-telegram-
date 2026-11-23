@@ -35,7 +35,6 @@ import kotlin.math.roundToInt
 
 @Composable
 fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit) {
-    val previews by viewModel.hidePreviews.collectAsStateWithLifecycle()
     val settings by viewModel.appearance.collectAsStateWithLifecycle()
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp).testTag("settings_scroll"), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         com.vector.messenger.feature.avatar.AccountSummary()
@@ -81,8 +80,8 @@ fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit) {
         DefaultRule()
         Text("Privacy", style = MaterialTheme.typography.titleMedium)
         DefaultAction("Ghost Mode", onPrivacy)
-        PreferenceToggle("Hide notification previews", previews, viewModel::hidePreviews)
-        Text("Preview preference only. Notifications are not implemented in this phase.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        DefaultRule()
+        com.vector.messenger.notifications.NotificationSettings(viewModel)
         HorizontalDivider()
         Text("About DEFAULT", style = MaterialTheme.typography.titleMedium)
         Text("Default · 0.1.0\nAppearance preferences are stored on this device. Signed-in chats use Telegram; signed-out chats are a separate demonstration. Manage your session from Account.")

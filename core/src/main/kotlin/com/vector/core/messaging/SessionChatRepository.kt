@@ -33,6 +33,7 @@ class SessionChatRepository(
     private var orderDirty = true
     private var ordered = emptyList<Pair<Long, ChatPosition>>()
     private val window = mutableMapOf<Long, Message>()
+    private var messageOrder = emptyList<Long>()
     private val versions = mutableMapOf<Long, Long>()
     private val replaced = linkedSetOf<Long>()
     private var revision = 0L
@@ -95,15 +96,22 @@ class SessionChatRepository(
                 orderDirty = false
             }
             chatState.value = ordered.mapNotNull { (id, position) -> records[id]?.let {
-                projected(it).copy(archived = position.archived, pinned = position.pinned, order = position.order)
+                val chat = projected(it)
+                if (chat.archived == position.archived && chat.pinned == position.pinned && chat.order == position.order) chat
+                else chat.copy(archived = position.archived, pinned = position.pinned, order = position.order)
             } }
         }
     }
     private fun projected(record: TelegramChat): Chat {
         val rule = access[record.peerId to record.supergroup]
         return if (rule?.restricted == true) record.chat.copy(preview = "Content unavailable", canSend = false, canSendPhotos = false, canSendDocuments = false, protectedContent = true, photo = null)
-        else record.chat.copy(canSend = rule?.canSendOverride ?: record.chat.canSend,
-            canSendPhotos = rule?.canSendPhotosOverride ?: record.chat.canSendPhotos)
+        else {
+            val chat = record.chat
+            val canSend = rule?.canSendOverride ?: chat.canSend
+            val canSendPhotos = rule?.canSendPhotosOverride ?: chat.canSendPhotos
+            if (chat.canSend == canSend && chat.canSendPhotos == canSendPhotos) chat
+            else chat.copy(canSend = canSend, canSendPhotos = canSendPhotos)
+        }
     }
     private fun change(id: Long, transform: (TelegramChat) -> TelegramChat) {
         val old = records[id] ?: return
@@ -130,11 +138,15 @@ class SessionChatRepository(
         window[message.id] = normalize(message).let { it.copy(senderName = access[it.senderId to false]?.displayName ?: it.senderName) }
     }
     private fun publishMessages(older: Boolean = false) {
-        val ordered = window.values.sortedBy { it.id }
-        if (older && ordered.size > WINDOW) atLatest = false
-        val bounded = if (older || !atLatest) ordered.take(WINDOW) else ordered.takeLast(WINDOW)
+        // Reactions, read receipts and media progress do not change message ordering.
+        if (messageOrder.size != window.size || messageOrder.any { it !in window }) messageOrder = window.keys.sorted()
+        if (older && messageOrder.size > WINDOW) atLatest = false
+        if (messageOrder.size > WINDOW) {
+            messageOrder = if (older || !atLatest) messageOrder.take(WINDOW) else messageOrder.takeLast(WINDOW)
+            window.keys.retainAll(messageOrder.toHashSet())
+        }
+        val bounded = messageOrder.mapNotNull(window::get)
         historyState.update { it.copy(atLatest = atLatest) }
-        window.keys.retainAll(bounded.mapTo(mutableSetOf()) { it.id })
         visibleReads.retainAll(window.keys)
         if (versions.size > WINDOW * 3) versions.keys.retainAll(window.keys)
         messageState.value = bounded

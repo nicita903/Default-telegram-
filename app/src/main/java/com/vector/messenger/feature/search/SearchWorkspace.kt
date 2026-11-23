@@ -119,7 +119,7 @@ private fun ChatSearchResults(viewModel: SearchViewModel, query: String, listSta
         if (query.isEmpty()) {
             if (recents.isNotEmpty()) {
                 item { Row(verticalAlignment = Alignment.CenterVertically) { Text("Recent searches", Modifier.weight(1f), color = DefaultDesign.colors.secondary); DefaultIconControl(Icons.Default.Close, "Clear recent searches", viewModel::clearRecent, Modifier.searchRegion(SearchRegionKind.Excluded), quiet = true) } }
-                items(recents, key = { "recent:$it" }) { recent -> SearchResultRow(recent, "Recent search", Icons.Default.Search) { viewModel.query(SearchScope.Chats, recent) } }
+                items(recents, key = { "recent:$it" }, contentType = { "recent_search" }) { recent -> SearchResultRow(recent, "Recent search", Icons.Default.Search) { viewModel.query(SearchScope.Chats, recent) } }
             }
             item { Row(Modifier.fillMaxWidth().excludeModuleGestures().searchRegion(SearchRegionKind.Excluded), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 listOf("New chat", "New group", "New channel").forEach { title -> Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
@@ -129,12 +129,12 @@ private fun ChatSearchResults(viewModel: SearchViewModel, query: String, listSta
             } }
         }
         if (category in listOf("All", "People", "Conversations")) {
-            items(matchingChats.filter { category != "People" || it.kind == ChatKind.Contact }, key = { "chat:${it.id}" }) { chat ->
+            items(matchingChats.filter { category != "People" || it.kind == ChatKind.Contact }, key = { "chat:${it.id}" }, contentType = { "search_chat" }) { chat ->
                 SearchResultRow(chat.title, if (chat.kind == ChatKind.Contact) "Person · ${chat.preview}" else "${chat.kind} · ${chat.preview}", avatar = chat.title, avatarPhoto = chat.photo, avatarId = chat.userId ?: chat.id, avatarUser = chat.userId != null) { viewModel.rememberQuery(query); onOpen(chat.id) }
             }
         }
         if (category in listOf("All", "Messages", "Media", "Files", "Links")) {
-            items(matchingMessages, key = { "message:${it.id}" }) { message ->
+            items(matchingMessages, key = { "message:${it.id}" }, contentType = { "search_message" }) { message ->
                 SearchResultRow(message.text.ifEmpty { message.attachment?.name ?: "Attachment" }, chats.find { it.id == message.chatId }?.title.orEmpty(), VectorIcons.Chat) { viewModel.rememberQuery(query); onOpen(message.chatId) }
             }
         }
@@ -180,10 +180,10 @@ private fun MusicSearchResults(viewModel: SearchViewModel, query: String, listSt
         openError?.let { item { SearchCaption(it) } }
         if (collection != null) item { DefaultAction("All ${category.lowercase()}", { collection = null }, Modifier.searchRegion(SearchRegionKind.Excluded), icon = Icons.AutoMirrored.Filled.ArrowBack) }
         if (collection == null && category in listOf("Albums", "Artists", "Playlists")) {
-            items(names, key = { "collection:${it.first}" }) { (id, name) -> SearchResultRow(name, category.dropLast(1), VectorIcons.Music) { collection = id } }
+            items(names, key = { "collection:${it.first}" }, contentType = { "search_collection" }) { (id, name) -> SearchResultRow(name, category.dropLast(1), VectorIcons.Music) { collection = id } }
             if (names.isEmpty()) item { SearchCaption("No ${category.lowercase()} found") }
         } else {
-            items(songs, key = { it.key }) { song -> SearchResultRow(song.title, "${song.artist} · ${song.album}", VectorIcons.Music) {
+            items(songs, key = { it.key }, contentType = { "search_song" }) { song -> SearchResultRow(song.title, "${song.artist} · ${song.album}", VectorIcons.Music) {
                 if (musicPlayer != null) musicPlayer.play(songs, song.key) else openError = "Open the Music module to play this track."
             } }
             if (library.permission && songs.isEmpty()) item { SearchCaption(when (category) {

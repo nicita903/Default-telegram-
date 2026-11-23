@@ -18,3 +18,6 @@ app/src/main/jniLibs/
 app/src/main/assets/telegram-config.json
 !app/src/main/java/org/drinkless/tdlib/
 !app/src/main/java/org/drinkless/tdlib/JsonClient.java
+
+app/google-services.json
+app/src/main/res/values/firebase-config.xml

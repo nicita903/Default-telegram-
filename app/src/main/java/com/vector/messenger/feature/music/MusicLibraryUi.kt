@@ -105,7 +105,7 @@ fun MusicLibrarySection(section: String) {
         }
         LazyColumn(Modifier.fillMaxSize().testTag("music_library"), state = rememberLazyListState(), contentPadding = PaddingValues(vertical = 12.dp)) {
             if (groupMode) {
-                items(groups, key = { "collection:${it.first}" }) { (id, name) ->
+                items(groups, key = { "collection:${it.first}" }, contentType = { "music_collection" }) { (id, name) ->
                     Row(Modifier.fillMaxWidth().excludeModuleGestures().clickable { collection = id }.padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                         AlbumArtwork(null, 40.dp); Text(name, Modifier.padding(start = 12.dp), color = DefaultDesign.colors.text)
                     }
@@ -134,7 +134,7 @@ fun MusicLibrarySection(section: String) {
         DefaultAction("Delete playlist", { vm.repository.delete(playlist.id); collection = null; delete = false }, destructive = true)
     }
     selected?.let { track -> DefaultDialog("Add to playlist", { selected = null }) {
-        LazyColumn(Modifier.heightIn(max = 320.dp)) { items(library.playlists.filterNot { it.readOnly }, key = { it.id }) { list -> DefaultAction(list.name, { vm.repository.add(list.id, track.key); selected = null }, Modifier.fillMaxWidth()) } }
+        LazyColumn(Modifier.heightIn(max = 320.dp)) { items(library.playlists.filterNot { it.readOnly }, key = { it.id }, contentType = { "playlist" }) { list -> DefaultAction(list.name, { vm.repository.add(list.id, track.key); selected = null }, Modifier.fillMaxWidth()) } }
         if (library.playlists.none { !it.readOnly }) Text("Create a playlist in Library → Playlists first.", color = DefaultDesign.colors.secondary)
         DefaultAction("Done", { selected = null })
     } }

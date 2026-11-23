@@ -170,7 +170,7 @@ private fun ChatRow(chat: Chat, selected: Boolean, onClick: () -> Unit, onPin: (
 fun ContactsScreen(contacts: List<Chat>, onSelect: (Long) -> Unit) {
     val colors = DefaultDesign.colors
     LazyColumn {
-        items(contacts, key = { it.id }) { contact ->
+        items(contacts, key = { it.id }, contentType = { "contact" }) { contact ->
             Row(Modifier.fillMaxWidth().clickable { onSelect(contact.id) }.heightIn(min = 76.dp).padding(horizontal = 20.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
                 TelegramAvatar(contact.title, contact.photo, 44.dp, contact.userId ?: contact.id, user = contact.userId != null)

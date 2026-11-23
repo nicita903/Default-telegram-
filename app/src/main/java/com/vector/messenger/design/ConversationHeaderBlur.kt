@@ -31,9 +31,10 @@ fun Modifier.conversationMessageDissolve(): Modifier {
     val header = with(density) { LocalConversationHeaderInset.current.toPx() }
     val radius = with(density) { glassBlurRadius().toPx() }
     val source = rememberGraphicsLayer()
-    val blurred = listOf(rememberGraphicsLayer(), rememberGraphicsLayer(), rememberGraphicsLayer())
-    val parts = listOf(rememberGraphicsLayer(), rememberGraphicsLayer(), rememberGraphicsLayer(), rememberGraphicsLayer())
-    val composite = rememberGraphicsLayer()
+    val blurSupported = Build.VERSION.SDK_INT >= 31 && radius > 0f
+    val blurred = if (blurSupported) listOf(rememberGraphicsLayer(), rememberGraphicsLayer(), rememberGraphicsLayer()) else emptyList()
+    val parts = if (blurSupported) listOf(rememberGraphicsLayer(), rememberGraphicsLayer(), rememberGraphicsLayer(), rememberGraphicsLayer()) else emptyList()
+    val composite = if (blurSupported) rememberGraphicsLayer() else null
     return drawWithCache {
         val top = header.coerceIn(0f, size.height)
         val span = 55.dp.toPx()
@@ -77,21 +78,24 @@ fun Modifier.conversationMessageDissolve(): Modifier {
             layer.compositingStrategy = CompositingStrategy.Offscreen
             layer.blendMode = BlendMode.Plus
         }
-        composite.clip = true
-        composite.compositingStrategy = CompositingStrategy.Offscreen
+        composite?.clip = true
+        composite?.compositingStrategy = CompositingStrategy.Offscreen
         onDrawWithContent {
-            val realBlur = Build.VERSION.SDK_INT >= 31 && radius > 0f && drawContext.canvas.nativeCanvas.isHardwareAccelerated
+            val hardware = drawContext.canvas.nativeCanvas.isHardwareAccelerated
+            val realBlur = blurSupported && hardware
             if (stripSize.width <= 0 || stripSize.height <= 0) {
                 // An IME-constrained viewport entirely behind the header has no visible content.
-            } else if (!realBlur) {
+            } else if (!realBlur || composite == null) {
                 // Android 10/11, software canvas, or Blur Off: real alpha-only dissolve, never
                 // a dark scrim pretending to blur. Canvas saveLayer confines the mask locally.
-                clipRect(top = end) { this@onDrawWithContent.drawContent() }
+                // Retain the viewport drawing once; replay it for the sharp area and local mask.
+                if (hardware) source.record { this@onDrawWithContent.drawContent() }
+                clipRect(top = end) { if (hardware) drawLayer(source) else this@onDrawWithContent.drawContent() }
                 drawIntoCanvas { canvas ->
                     canvas.saveLayer(fallbackBounds, fallbackPaint)
                     try {
                         clipRect(top = top, bottom = end) {
-                            this@onDrawWithContent.drawContent()
+                            if (hardware) drawLayer(source) else this@onDrawWithContent.drawContent()
                             drawRect(fade, blendMode = BlendMode.DstIn)
                         }
                     } finally { canvas.restore() }

@@ -8,13 +8,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** Typed adapter over the original manager. No JNI client or receive coroutine is created here. */
-class TdlibMessagingClient(private val manager: TdlibClientManager) : TelegramMessagingClient {
+class TdlibMessagingClient(private val manager: TdlibClientManager, private val expectedAccount: Long? = null) : TelegramMessagingClient {
     override val connection = manager.connection
     override val updates = manager.messagingUpdates.mapNotNull { update ->
         try { mapChatUpdate(update, manager::messagingPhoto) } catch (_: Exception) { null }
     }.flowOn(Dispatchers.IO)
     private suspend fun call(payload: JSONObject): JSONObject {
-        val result = manager.messagingRequest(payload)
+        val result = manager.messagingRequest(payload, expectedAccount)
         if (result.optString("@type") == "error") throw MessagingException(when (result.optInt("code")) {
             403 -> MessagingFailure.Forbidden
             in 500..599, 0 -> MessagingFailure.Network

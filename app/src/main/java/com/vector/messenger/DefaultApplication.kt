@@ -4,4 +4,15 @@ import android.app.Application
 import dagger.hilt.android.HiltAndroidApp
 
 @HiltAndroidApp
-class DefaultApplication : Application()
+class DefaultApplication : Application() {
+    @javax.inject.Inject lateinit var notifications: com.vector.messenger.notifications.TelegramNotifications
+    @javax.inject.Inject lateinit var authentication: com.vector.core.auth.AuthenticationRepository
+    override fun onCreate() {
+        super.onCreate()
+        // Restoration must never depend on notification channels, permission, or Firebase.
+        authentication.start()
+        try { notifications.start() }
+        catch (_: Exception) { android.util.Log.w("DefaultNotifications", "Notification startup deferred; Telegram restoration continues") }
+        catch (_: LinkageError) { android.util.Log.w("DefaultNotifications", "Notification dependency unavailable; Telegram restoration continues") }
+    }
+}

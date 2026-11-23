@@ -50,7 +50,7 @@ import androidx.core.view.WindowInsetsCompat
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
-fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search: SearchViewModel, onAccount: () -> Unit = {}) {
+fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search: SearchViewModel, onAccount: () -> Unit = {}, notificationHost: com.vector.messenger.notifications.TelegramNotifications? = null) {
     val navigation = rememberVectorNavigationController()
     // Keep the six controllers above the active content: switching modules does not reset stacks.
     val controllers = AppModule.entries.associateWith { key(it) { rememberNavController() } }
@@ -112,8 +112,30 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
         chats.open(id)
         controllers.getValue(AppModule.Chats).navigate(Routes.conversation(id)) { launchSingleTop = true }
     }
-    val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
+    val notificationDestination by (notificationHost?.destinationState ?: kotlinx.coroutines.flow.MutableStateFlow(null)).collectAsStateWithLifecycle()
+    val notificationAccount by (notificationHost?.accountId ?: remember { kotlinx.coroutines.flow.MutableStateFlow(0L) }).collectAsStateWithLifecycle()
+    SideEffect {
+        notificationHost?.activeConversation = if (chatStatus.live && notificationAccount != 0L && conversation && !profileOpen && !menu && !searchOwnsInput)
+            entry?.arguments?.getLong("chatId")?.let { com.vector.core.ConversationIdentity("telegram", notificationAccount.toString(), it.toString()) } else null
+    }
+    DisposableEffect(notificationHost) { onDispose { notificationHost?.activeConversation = null } }
+    LaunchedEffect(notificationDestination, chatStatus.live) {
+        val target = notificationDestination ?: return@LaunchedEffect
+        if (!chatStatus.live) return@LaunchedEffect
+        if (notificationHost?.resolveDestination(target) == true) {
+            closeSearch(); profileOpen = false; transientChats = false; menu = false; newMessage = false
+            navigation.select(AppModule.Chats)
+            val chatNav = controllers.getValue(AppModule.Chats)
+            if (chatNav.currentBackStackEntry?.arguments?.getLong("chatId") != target.chat || chatNav.currentBackStackEntry?.destination?.route != Routes.Conversation) {
+                chatNav.popBackStack(AppModule.Chats.name, false)
+                chats.open(target.chat)
+                chatNav.navigate(Routes.conversation(target.chat)) { launchSingleTop = true }
+            }
+        } else snackbar.showSnackbar("This notification belongs to an unavailable Telegram session. Open Account to sign in.")
+        notificationHost?.destinationHandled(target)
+    }
+    val scope = rememberCoroutineScope()
     val holder = rememberSaveableStateHolder()
     val modulePolicy: () -> GestureCancelReason = {
         moduleGestureEligibility(

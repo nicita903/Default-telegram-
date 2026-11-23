@@ -24,6 +24,10 @@ internal fun mapProfileFile(json: JSONObject, filesRoot: File, databaseRoot: Fil
     if (id <= 0) { AvatarDiagnostics.record(AvatarStage.FileIdMissing); return null }
     val local = json.optJSONObject("local")
     val path = local?.optString("path")?.takeIf { it.isNotBlank() && local.optBoolean("is_downloading_completed") }
+    if (path == null) {
+        AvatarDiagnostics.record(AvatarStage.FileIncomplete)
+        return ProfilePhoto(id)
+    }
     val safePath = try {
         // TDLib classifies ProfilePhoto/Thumbnail as Secure and stores them under its
         // database directory, even when files_directory points somewhere different.

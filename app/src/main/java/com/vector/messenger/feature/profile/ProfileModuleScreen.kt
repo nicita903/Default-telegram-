@@ -246,7 +246,7 @@ internal fun NewPostScreen(vm: ProfileModuleViewModel, onDone: () -> Unit) {
             Text("${selected.size} selected", color = DefaultDesign.colors.secondary, style = MaterialTheme.typography.bodySmall)
             contactError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
             LazyColumn(Modifier.fillMaxWidth().heightIn(max = 260.dp)) {
-                items(contacts, key = { it.owner.id }) { contact ->
+                items(contacts, key = { it.owner.id }, contentType = { "profile_contact" }) { contact ->
                     Row(Modifier.fillMaxWidth().excludeModuleGestures().clickable(enabled = !state.posting) { vm.toggleUser(contact.owner.id) }.padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically) {
                         TelegramAvatar(contact.name, contact.small, 36.dp, contact.owner.id, user = true)
                         Text(contact.name, Modifier.weight(1f).padding(start = 10.dp), color = DefaultDesign.colors.text)

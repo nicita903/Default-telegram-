@@ -113,6 +113,7 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
             MediaItem(chatId, message.id, it, message.canSave && chat?.protectedContent != true)
         } }
     }
+    val mediaByMessage = remember(mediaItems) { mediaItems.associateBy { it.messageId } }
     LaunchedEffect(toolRequest) {
         val request = toolRequest?.takeIf { it.chatId == chatId } ?: return@LaunchedEffect
         if (request.name == "media") mediaSelection = mediaItems.lastOrNull()?.messageId
@@ -126,13 +127,20 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
         viewModel.enter(chatId)
         onStopOrDispose { viewModel.leave(chatId) }
     }
-    LaunchedEffect(listState, newestFirst, history, status.session, visibleTop) {
-        snapshotFlow { listState.layoutInfo.visibleItemsInfo.filter { it.offset + it.size > visibleTop }.mapNotNull { item -> newestFirst.getOrNull(item.index)?.id } }
-            .collect { ids ->
-                viewModel.visible(chatId, ids)
-                if (status.live && ids.any { it == newestFirst.lastOrNull()?.id } && !history.loading && history.error == null && history.hasMore)
-                    viewModel.older(chatId)
-            }
+    val visibilityMessages by rememberUpdatedState(newestFirst)
+    val visibilityHistory by rememberUpdatedState(history)
+    val visibilityLive by rememberUpdatedState(status.live)
+    LaunchedEffect(listState, chatId, status.session, visibleTop) {
+        snapshotFlow {
+            val current = visibilityMessages
+            val page = visibilityHistory
+            val ids = listState.layoutInfo.visibleItemsInfo.filter { it.offset + it.size > visibleTop }
+                .mapNotNull { item -> current.getOrNull(item.index)?.id }
+            ids to (visibilityLive && ids.any { it == current.lastOrNull()?.id } && !page.loading && page.error == null && page.hasMore)
+        }.collect { (ids, older) ->
+            viewModel.visible(chatId, ids)
+            if (older) viewModel.older(chatId)
+        }
     }
     fun submitSelectedPhotos() {
         if (!galleryOpen || selectedPhotos.isEmpty() || busy || photoUncertain) return
@@ -191,7 +199,7 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
                         onReaction = { viewModel.react(chatId, message.id, it) },
                         onCancelUpload = { viewModel.cancelPhotoSend(chatId, message.id) },
                         onRetryUpload = { viewModel.retry(chatId, message.id) },
-                        mediaViewModel = mediaViewModel, mediaItem = mediaItems.find { it.messageId == message.id },
+                        mediaViewModel = mediaViewModel, mediaItem = mediaByMessage[message.id],
                         onMedia = { mediaSelection = message.id },
                         onOpenAttachment = { attachment ->
                             try { context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(attachment.uri.toUri(), attachment.mimeType).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)) }
@@ -297,7 +305,7 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
         Text("Searches currently loaded history.", color = colors.secondary, style = MaterialTheme.typography.bodySmall)
         val matches = remember(messages, chatSearch) { if (chatSearch.isBlank()) emptyList() else messages.filter { it.text.contains(chatSearch.trim(), ignoreCase = true) } }
         LazyColumn(Modifier.heightIn(max = 300.dp)) {
-            itemsIndexed(matches, key = { _, item -> item.id }) { _, found ->
+            itemsIndexed(matches, key = { _, item -> item.id }, contentType = { _, _ -> "message_search" }) { _, found ->
                 Column(Modifier.fillMaxWidth().clickable {
                     chatTool = null
                     val index = newestFirst.indexOfFirst { it.id == found.id }

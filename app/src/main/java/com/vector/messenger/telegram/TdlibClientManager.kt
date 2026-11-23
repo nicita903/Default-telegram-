@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import org.drinkless.tdlib.JsonClient
@@ -50,6 +51,25 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
     private val activityTypes = setOf("updateUserStatus", "updateUser", "updateChatAction", "updateNewMessage")
     private val activityEvents = MutableSharedFlow<AvatarEnvelope>(extraBufferCapacity = 128)
     internal val activityUpdates = activityEvents.asSharedFlow().filter { it.epoch == sessionEpoch && authorized }.map { it.value }
+    private val notificationTypes = setOf("updateChatReadInbox", "updateUser", "updateNotificationGroup", "updateNotification", "updateActiveNotifications", "updateHavePendingNotifications", "updateFile", "updateChatPhoto", "updateChatNotificationSettings", "updateScopeNotificationSettings", "updateMessageSendSucceeded", "updateMessageSendFailed")
+    private class NotificationEnvelope(val epoch: Long, val value: JSONObject, val done: CompletableDeferred<Unit>? = null)
+    private val notificationEvents = Channel<NotificationEnvelope>(Channel.UNLIMITED)
+    internal val notificationUpdates = kotlinx.coroutines.flow.flow {
+        for (event in notificationEvents) {
+            if (event.epoch == sessionEpoch && authorized) emit(event.value)
+            event.done?.complete(Unit)
+        }
+    }
+    internal suspend fun flushNotificationUpdates() {
+        val done = CompletableDeferred<Unit>()
+        notificationEvents.send(NotificationEnvelope(sessionEpoch, request("defaultNotificationDrain"), done))
+        withTimeout(15_000) { done.await() }
+    }
+    internal suspend fun processNotificationPush(payload: String): JSONObject = withContext(Dispatchers.IO) {
+        start()
+        if (clientId == 0) return@withContext request("error", "code" to 503)
+        send(request("processPushNotification", "payload" to payload))
+    }
     private val mediaTypes = setOf("updateFile", "updateFileAddedToDownloads", "updateFileDownload", "updateFileRemovedFromDownloads")
     private val actionTargets = ConcurrentHashMap<Long, Long>()
     @Volatile private var actionPolicy: (Long, String) -> Boolean = { _, action -> action == "chatActionCancel" }
@@ -72,7 +92,7 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
     @Volatile private var authorized = false
     @Volatile private var sessionEpoch = 0L
     @Volatile private var profileRevision = 0L
-    private var selfId = 0L // Mutated only by the existing receive loop.
+    @Volatile private var selfId = 0L // Mutated only by the existing receive loop.
     private var selfPhotoId = 0
     private val vault = TdlibKeyVault(context)
     private val database = File(context.noBackupFilesDir, "telegram/database")
@@ -80,6 +100,7 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
     @Volatile private var clientId = 0
     @Volatile private var logoutConfirmed = false
     private var receiver: Job? = null
+    private var networkMonitor: Job? = null
 
     override suspend fun start() = withContext(Dispatchers.IO) {
         lifecycle.withLock {
@@ -126,6 +147,7 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                             }
                             "updateConnectionState" -> connectionState.value = mapProfileConnection(json.optJSONObject("state") ?: JSONObject())
                         }
+                        if (authorized && json.optString("@type") in notificationTypes) notificationEvents.send(NotificationEnvelope(sessionEpoch, json))
                         if (authorized && json.optString("@type") in messagingTypes) messagingEvents.send(MessagingEnvelope(sessionEpoch, json))
                         if (authorized && json.optString("@type") in mediaTypes) mediaEvents.emit(json)
                         if (authorized && json.optString("@type") in activityTypes) activityEvents.emit(AvatarEnvelope(sessionEpoch, json))
@@ -147,6 +169,7 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                             "authorizationStateClosed" -> {
                                 lifecycle.withLock {
                                     clientId = 0
+                                    networkMonitor?.cancel(); networkMonitor = null
                                     pending.values.forEach { it.result.cancel() }; pending.clear()
                                     if (logoutConfirmed) {
                                         try { vault.clearAfterLogout() }
@@ -172,6 +195,8 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
             try {
                 check(database.exists() || database.mkdirs())
                 check(files.exists() || files.mkdirs())
+                // Submit parameters first: TDLib queues pre-authentication setOption requests
+                // until this completes. Awaiting an option here would deadlock initialization.
                 val parameters = request("setTdlibParameters",
                     "use_test_dc" to false, "database_directory" to database.absolutePath, "files_directory" to files.absolutePath,
                     "database_encryption_key" to Base64.encodeToString(key, Base64.NO_WRAP),
@@ -182,9 +207,28 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                     "system_version" to Build.VERSION.RELEASE, "application_version" to "DEFAULT 0.1.0")
                 val result = send(parameters)
                 if (result.optString("@type") == "error") events.send(AuthStep.SetupRequired("Telegram initialization was rejected. Check the API configuration and original storage key; existing data has been preserved."))
+                else observeNetwork()
             } finally { key.fill(0) }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { events.send(AuthStep.SetupRequired(AuthFailure.Storage.description)) }
+    }
+
+    private fun observeNetwork() {
+        if (networkMonitor?.isActive == true) return
+        val client = clientId
+        networkMonitor = scope.launch(Dispatchers.IO) {
+            try {
+                telegramNetworkChanges(context).collect { hint ->
+                    if (clientId != client) return@collect
+                    try {
+                        val result = send(request("setNetworkType", "type" to request(hint.type)))
+                        if (result.optString("@type") == "error") android.util.Log.w("DefaultConnectivity", "TDLib rejected a network hint")
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { android.util.Log.w("DefaultConnectivity", "Network hint failed; TDLib retains connection control") }
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { android.util.Log.w("DefaultConnectivity", "Android connectivity monitoring unavailable") }
+        }
     }
 
     override suspend fun execute(action: AuthAction): AuthFailure? = withContext(Dispatchers.IO) {
@@ -225,7 +269,8 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
         return result
     }
 
-    internal suspend fun messagingRequest(payload: JSONObject): JSONObject = withContext(Dispatchers.IO) {
+    internal suspend fun messagingRequest(payload: JSONObject, expectedAccount: Long? = null): JSONObject = withContext(Dispatchers.IO) {
+        if (expectedAccount != null && selfId != expectedAccount) throw com.vector.core.messaging.MessagingException(com.vector.core.messaging.MessagingFailure.Unavailable)
         if (!authorized || clientId == 0) throw com.vector.core.messaging.MessagingException(com.vector.core.messaging.MessagingFailure.Unavailable)
         val epoch = sessionEpoch
         val result = try { send(payload) }
