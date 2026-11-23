@@ -33,7 +33,8 @@ import java.util.UUID
 @Singleton
 class TelegramNotifications @Inject constructor(@ApplicationContext private val context: Context,
     private val manager: TdlibClientManager, private val auth: AuthenticationRepository, private val profile: ProfileRepository,
-    val preferences: NotificationPreferenceStore, private val scope: CoroutineScope) {
+    val preferences: NotificationPreferenceStore, private val scope: CoroutineScope,
+    private val avatars: TdlibAvatarClient, private val pushRegistration: TelegramPushRegistration) {
     private data class Group(val id: Int, val chat: Long, val mention: Boolean, var count: Int = 0,
         val messages: MutableMap<Int, JSONObject> = linkedMapOf(), var sound: Boolean = false, var settingsChat: Long = chat)
     private val groups = linkedMapOf<Int, Group>()
@@ -50,11 +51,14 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
     private val tappedGroups = mutableMapOf<ConversationIdentity, IntArray>()
     private val photos = mutableMapOf<Long, android.graphics.Bitmap>()
     private val photoFiles = mutableMapOf<Int, Long>()
+    private val thumbnailRequests = mutableSetOf<Int>()
     private val posted = mutableSetOf<Long>()
     private val notices = mutableMapOf<Long, String>()
     private val replies = mutableMapOf<Long, Long>()
     private val replyResults = linkedMapOf<Long, Boolean>()
     private val actionGuard = Mutex()
+    private val pushGuard = Mutex()
+    private var pushCorrelation: String? = null
     private val storage = context.getSharedPreferences("notification_actions", Context.MODE_PRIVATE)
     private val system = context.getSystemService(NotificationManager::class.java)
     private var owner = 0L
@@ -67,7 +71,7 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
         set(value) {
             if (field == value) return
             field = value
-            if (value) activeConversation?.let { dismissConversation(it) }
+            if (value) { activeConversation?.let { dismissConversation(it) }; pushRegistration.foreground() }
         }
     var activeConversation: ConversationIdentity? = null
         set(value) {
@@ -77,15 +81,16 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
         }
     private val destination = MutableStateFlow<NotificationDestination?>(null)
     val destinationState = destination.asStateFlow()
-    private val pushToken = MutableStateFlow<Pair<String, Long>?>(null)
-    val pushState = MutableStateFlow("Push configuration required")
-    private var registered: Pair<Long, String>? = null
+    val pushState = pushRegistration.state
     private fun tag(chat: Long, account: Long = owner) = "default:telegram:$account:$chat"
     private fun shortcut(chat: Long) = "telegram:$owner:$chat"
     private fun groupKey() = "default:telegram:$owner"
     fun start() {
         if (started) return
         started = true
+        pushRegistration.start()
+        trace("notification implementation started")
+        scope.launch { profile.state.collect { trace("profile=$it") } }
         scope.launch(Dispatchers.IO) {
           try {
             listOf(Triple("messages_v1", "Messages", NotificationManager.IMPORTANCE_DEFAULT),
@@ -102,17 +107,20 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
                     try { clearNative() }
                     catch (_: Exception) { diagnostic("Native notification cleanup failed") }
                 }
-                owner = id ?: 0; account.value = owner
+                owner = id ?: 0; account.value = owner; pending.value = false
                 groups.clear(); chats.clear(); scopes.clear(); senders.clear(); senderPhotos.clear(); senderPhotoFiles.clear(); senderChats.clear()
-                dismissedThrough.clear(); readThrough.clear(); renderVersions.clear(); photos.clear(); photoFiles.clear(); posted.clear(); notices.clear(); replies.clear(); replyResults.clear(); registered = null
+                dismissedThrough.clear(); readThrough.clear(); renderVersions.clear(); photos.clear(); photoFiles.clear(); thumbnailRequests.clear(); posted.clear(); notices.clear(); replies.clear(); replyResults.clear()
                 if (id == null) return@collectLatest
+                trace("account ready; configuring notification groups")
                 // Options are optional account work, never prerequisites for setTdlibParameters/getMe.
                 try {
                     for (name in listOf("notification_group_count_max", "notification_group_size_max"))
                         checked(request("setOption", "name" to name, "value" to request("optionValueInteger", "value" to 25)), id)
                 } catch (cancelled: CancellationException) { throw cancelled }
                   catch (_: Exception) { diagnostic("TDLib notification options failed; account remains available") }
+                trace("notification update consumer attached")
                 manager.notificationUpdates.collect { update ->
+                    if (update.optString("@type") in setOf("updateNotificationGroup", "updateNotification", "updateActiveNotifications", "updateHavePendingNotifications")) trace("received ${update.optString("@type")}")
                     try { reduce(update) }
                     catch (cancelled: CancellationException) { throw cancelled }
                     catch (_: Exception) { diagnostic("Notification update failed") }
@@ -124,36 +132,12 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
             catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { diagnostic("Notification preference refresh failed") }
         } }
-        scope.launch { combine(profile.state, pushToken) { account, token -> account.profile?.id?.takeIf { account.authenticated } to token }
-            .distinctUntilChanged().collectLatest { (account, tokenEvent) ->
-                val token = tokenEvent?.first
-                if (account != null && token != null && registered != (account to token)) {
-                    try {
-                        checked(request("registerDevice", "device_token" to request("deviceTokenFirebaseCloudMessaging", "token" to token, "encrypt" to true), "other_user_ids" to JSONArray()), account)
-                        registered = account to token; pushState.value = "Registered · device verification required"
-                    } catch (cancelled: CancellationException) { throw cancelled }
-                    catch (_: Exception) { diagnostic("Push registration failed"); pushState.value = "Push registration failed · reopen Default to retry" }
-                }
-            }
-        }
-        // Application/AuthenticationRepository owns the shared session startup.
-        scope.launch { profile.state.map { it.authenticated && it.profile != null }.distinctUntilChanged().collect { ready -> if (ready) refreshPushToken() } }
+    }
+    private fun trace(message: String) {
+        if (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) android.util.Log.d("DefaultNotificationTrace", message)
     }
     private fun diagnostic(message: String) { android.util.Log.w("DefaultNotifications", message) }
-    fun refreshPushToken() {
-        if (!profile.state.value.authenticated || profile.state.value.profile == null) return
-        try {
-            if (com.google.firebase.FirebaseApp.getApps(context).isEmpty()) return
-            com.google.firebase.messaging.FirebaseMessaging.getInstance().apply {
-                isAutoInitEnabled = true
-                token.addOnSuccessListener { token(it) }.addOnFailureListener {
-                    pushState.value = "Push token unavailable"; diagnostic("Push token fetch failed")
-                }
-            }
-        } catch (_: Exception) { pushState.value = "Push unavailable"; diagnostic("Firebase initialization failed") }
-          catch (_: LinkageError) { pushState.value = "Push unavailable"; diagnostic("Firebase dependency unavailable") }
-    }
-    fun token(value: String) { pushToken.update { value to ((it?.second ?: 0) + 1) } }
+    fun token(value: String) = pushRegistration.token(value)
     fun accept(intent: Intent?) {
         if (intent?.action != "com.vector.messenger.OPEN_CONVERSATION") return
         val account = intent.getLongExtra("account", 0); val chat = intent.getLongExtra("chat", 0)
@@ -200,13 +184,17 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
         return true
     }
     /** Dismissal is not a read receipt. Native removal is immediate; TDLib cleanup is optional async work. */
-    private fun dismissConversation(target: ConversationIdentity, sync: Boolean = true) {
+    private fun dismissConversation(target: ConversationIdentity, sync: Boolean = true, forceNativeCancel: Boolean = true) {
         val account = target.accountId.toLongOrNull() ?: return
         val chat = target.subjectId.toLongOrNull() ?: return
         if (target.providerId != "telegram" || account == 0L || account != owner) return
         renderVersions[chat] = (renderVersions[chat] ?: 0) + 1
         try {
-            val native = system.activeNotifications.firstOrNull { it.tag == tag(chat, account) && it.id == 1 }
+            // Android's snapshot can lag an enqueue/auto-cancel. Entry must cancel the exact
+            // tag/id even when that snapshot (or process-local bookkeeping) is empty.
+            val native = try { system.activeNotifications.firstOrNull { it.tag == tag(chat, account) && it.id == 1 } }
+                catch (_: Exception) { diagnostic("Notification snapshot unavailable; direct cancellation will still run"); null }
+            if (forceNativeCancel) { system.cancel(tag(chat, account), 1); posted.remove(chat) }
             val known = groups.values.filter { it.chat == chat }.map { it.id to (it.messages.keys.maxOrNull() ?: 0) }
             val tapped = tappedGroups.remove(target)
             val tracked = chat in posted
@@ -214,8 +202,8 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
                 .flatMap { it.toList().chunked(2) }.filter { it.size == 2 }.map { it[0] to it[1] }
             val maxima = (known + restored).groupBy({ it.first }, { it.second }).mapValues { it.value.max() }
             val newlyDismissed = maxima.filter { (group, through) -> rememberDismissal(account, group, through) }
-            cancel(chat, native != null)
-            if (!tracked && native == null && tapped != null) summary(chat)
+            if (!forceNativeCancel) cancel(chat, native != null)
+            if (forceNativeCancel || (!tracked && native == null && tapped != null)) summary(chat)
             if (sync && newlyDismissed.isNotEmpty()) scope.launch {
                 for ((group, through) in newlyDismissed) {
                     if (owner != account) return@launch
@@ -230,6 +218,7 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
         messageId(raw).let { it == 0L || it > (readThrough[group.chat] ?: 0L) }
     private suspend fun checked(value: JSONObject, account: Long = owner): JSONObject {
         val result = manager.messagingRequest(value, account)
+        if (result.optString("@type") == "error") trace("request ${value.optString("@type")} rejected code=${result.optInt("code")}")
         check(result.optString("@type") != "error") { "Notification operation unavailable" }
         return result
     }
@@ -270,7 +259,7 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
             "updateChatReadInbox" -> {
                 val chat = value.optLong("chat_id")
                 readThrough[chat] = maxOf(readThrough[chat] ?: 0L, value.optLong("last_read_inbox_message_id"))
-                if (value.optInt("unread_count") == 0) dismissConversation(identity(chat), sync = false)
+                if (value.optInt("unread_count") == 0) dismissConversation(identity(chat), sync = false, forceNativeCancel = false)
                 else render(chat, false)
             }
             "updateUser" -> value.optJSONObject("user")?.let { user ->
@@ -312,6 +301,18 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
       catch (_: Exception) { null }
     private suspend fun scopeSettings(type: String): JSONObject? = scopes[type] ?: optional(
         request("getScopeNotificationSettings", "scope" to request(type)), 2_000)?.also { scopes[type] = it }
+    private fun requestThumbnail(photo: ProfilePhoto, account: Long) {
+        if (photo.localPath != null || !thumbnailRequests.add(photo.fileId)) return
+        scope.launch {
+            if (owner != account || preferences.state.value.hideContent) { thumbnailRequests.remove(photo.fileId); return@launch }
+            try {
+                val file = avatars.download(photo.fileId, account)
+                // A completed cached file may be returned without a subsequent updateFile.
+                if (owner == account) reduce(request("updateFile", "file" to file))
+            } catch (cancelled: CancellationException) { throw cancelled }
+              catch (_: Exception) { diagnostic("Notification thumbnail unavailable; native fallback retained") }
+        }
+    }
     private suspend fun renderAll(alert: Boolean) { (groups.values.map { it.chat } + posted).distinct().forEach { render(it, alert) } }
     private suspend fun sender(value: JSONObject?, chat: Long): Sender {
         value ?: return Sender("Someone", "unknown")
@@ -340,10 +341,10 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
         val account = owner
         val version = (renderVersions[chatId] ?: 0) + 1
         renderVersions[chatId] = version
-        if (viewing(chatId, account)) { dismissConversation(identity(chatId, account)); return }
+        if (viewing(chatId, account)) { trace("suppress: active conversation"); dismissConversation(identity(chatId, account), forceNativeCancel = false); return }
         val selected = groups.values.filter { it.chat == chatId && it.count > 0 }
         val prefs = preferences.state.value
-        if (selected.isEmpty() || !prefs.enabled || !NotificationManagerCompat.from(context).areNotificationsEnabled()) { cancel(chatId); return }
+        if (selected.isEmpty() || !prefs.enabled || !NotificationManagerCompat.from(context).areNotificationsEnabled()) { trace("skip: groups=${selected.size} enabled=${prefs.enabled} permission=${NotificationManagerCompat.from(context).areNotificationsEnabled()}"); cancel(chatId); return }
         val chat = chats[chatId] ?: optional(request("getChat", "chat_id" to chatId), 3_000)?.also { chats[chatId] = it }
         if (account != owner) return
         val type = chat?.optJSONObject("type")
@@ -354,7 +355,7 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
         val inherited = if (settings?.optBoolean("use_default_mute_for") == true || settings?.optBoolean("use_default_show_preview") == true)
             scopeSettings(if (privateChat) "notificationSettingsScopePrivateChats" else if (type?.optBoolean("is_channel") == true) "notificationSettingsScopeChannelChats" else "notificationSettingsScopeGroupChats") else null
         val muted = (if (settings?.optBoolean("use_default_mute_for") == true) inherited?.optInt("mute_for") else settings?.optInt("mute_for")) ?: 0
-        if (muted > 0 && !mention) { cancel(chatId); return }
+        if (muted > 0 && !mention) { trace("suppress: Telegram mute setting"); cancel(chatId); return }
         var serverPreview = if (settings?.optBoolean("use_default_show_preview") == true) inherited?.optBoolean("show_preview") == true else settings?.optBoolean("show_preview") == true
         // Mentions may use a different conversation's privacy settings, as specified by TDLib.
         selected.map { it.settingsChat }.distinct().filter { it != chatId }.forEach { settingsId ->
@@ -377,7 +378,7 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
                 senderKey = from.key, senderPhoto = from.photo)
         }
         val messages = rows.distinctBy { it.messageId }.sortedBy { it.timestamp }.takeLast(25)
-        if (messages.isEmpty()) { cancel(chatId); return }
+        if (messages.isEmpty()) { trace("skip: no visible incoming notifications"); cancel(chatId); return }
         if (owner != account || renderVersions[chatId] != version) return
         val visible = !prefs.hideContent && messages.all { it.showPreview }
         val title = if (visible) chat?.optString("title")?.ifBlank { messages.last().senderName } ?: messages.last().senderName else "Default"
@@ -417,8 +418,10 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
             builder.setShortcutId(shortcut.id)
         } else ShortcutManagerCompat.removeLongLivedShortcuts(context, listOf(shortcut(chatId)))
         if (account != owner || preferences.state.value != prefs || renderVersions[chatId] != version) return
-        if (viewing(chatId, account)) { dismissConversation(identity(chatId, account)); return }
+        if (viewing(chatId, account)) { trace("suppress: active conversation"); dismissConversation(identity(chatId, account), forceNativeCancel = false); return }
         NotificationManagerCompat.from(context).notify(tag(chatId), 1, builder.build()); posted += chatId
+        trace("posted conversation notification: count=${messages.size} previews=$visible")
+        PushDiagnostics.event("Android notification posted", pushCorrelation ?: "session")
         if (visible && avatar == null) chat?.optJSONObject("photo")?.optJSONObject("small")?.let { file ->
             val photo = manager.messagingPhoto(file)
             if (photo != null) {
@@ -428,14 +431,17 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
                     val image = MediaImages.load(localPath, 128, account)?.bitmap
                     if (image != null && owner == account) { photos[chatId] = image; render(chatId, false) }
                 }
-                // Cached thumbnails only: notification delivery never downloads full profile photos.
+                else requestThumbnail(photo, account)
+                // Only the existing small avatar file is requested, after native delivery.
             }
         }
         if (visible) {
             var changed = false
             for (m in messages.distinctBy { it.senderKey }) {
                 if (senderPhotos.containsKey(m.senderKey)) continue
-                val path = m.senderPhoto?.localPath ?: continue
+                val photo = m.senderPhoto ?: continue
+                val path = photo.localPath
+                if (path == null) { requestThumbnail(photo, account); continue }
                 val bitmap = MediaImages.load(path, 128, account)?.bitmap ?: continue
                 if (account != owner || preferences.state.value != prefs) return
                 senderPhotos[m.senderKey] = bitmap
@@ -510,17 +516,34 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (_: Exception) { notices[chat] = "Action failed · open Default to retry"; try { render(chat, false) } catch (_: Exception) { } }
     } }
-    suspend fun push(payload: String): Boolean {
+    suspend fun push(payload: String, correlation: String): Boolean = withContext(Dispatchers.Main.immediate) { pushGuard.withLock {
+        pushCorrelation = correlation
+        try {
         start()
-        val response = withTimeoutOrNull(25_000) { manager.processNotificationPush(payload) } ?: return false
-        if (response.optString("@type") == "error" && response.optInt("code") != 406) return false
-        // 406 requires the restored TDLib connection; do not turn the push payload into a second alert.
-        if (awaitAccount() == null) return auth.state.value.step !is AuthStep.Ready
+        val receiver = try { manager.pushReceiverId(payload) }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { PushDiagnostics.event("push receiver resolution failed", correlation); return@withContext false }
+            catch (_: LinkageError) { PushDiagnostics.event("push native library unavailable", correlation); return@withContext false }
+        val target = pushRegistration.target(receiver)
+        if (target == null) { PushDiagnostics.event("push receiver unavailable for current session", correlation); return@withContext true }
+        PushDiagnostics.event("push receiver resolved", correlation)
+        PushDiagnostics.event("push processing started", correlation)
+        val response = withTimeoutOrNull(25_000) { manager.processNotificationPush(payload, target) } ?: return@withContext false
+        if (response.optString("@type") == "error" && response.optInt("code") != 406) {
+            PushDiagnostics.event("TDLib push processing rejected", correlation); return@withContext false
+        }
+        // Native push updates are buffered until the shared authenticated account is available.
+        val account = awaitAccount() ?: return@withContext false
+        if (account != target) { PushDiagnostics.event("push account mismatch; no session switched", correlation); return@withContext true }
         if (response.optInt("code") == 406) {
-            withTimeoutOrNull(20_000) { manager.connection.first { it == com.vector.core.profile.ProfileConnection.Ready } } ?: return false
+            PushDiagnostics.event("push requires network synchronization", correlation)
+            withTimeoutOrNull(20_000) { manager.connection.first { it == com.vector.core.profile.ProfileConnection.Ready } } ?: return@withContext false
         }
         manager.flushNotificationUpdates()
-        withTimeoutOrNull(15_000) { pending.first { !it } } ?: return false
-        return true
-    }
+        withTimeoutOrNull(15_000) { pending.first { !it } } ?: return@withContext false
+        manager.flushNotificationUpdates()
+        PushDiagnostics.event("push processing completed", correlation)
+        true
+        } finally { pushCorrelation = null }
+    } }
 }

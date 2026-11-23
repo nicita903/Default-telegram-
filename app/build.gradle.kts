@@ -23,6 +23,8 @@ android {
     }
     buildFeatures { compose = true }
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/telegramAssets"))
+    sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/firebaseAssets"))
+    sourceSets["main"].res.srcDir(layout.buildDirectory.dir("generated/firebaseRes"))
     // Official Android CMake target already strips this prebuilt library; no SDK NDK install is needed by AGP.
     packaging { jniLibs { keepDebugSymbols += "**/libtdjsonjava.so" } }
     compileOptions {
@@ -106,3 +108,38 @@ val verifyTdlibNative by tasks.registering {
     }
 }
 tasks.named("preBuild").configure { dependsOn(verifyTdlibNative) }
+
+// Optional real Firebase client configuration, without changing build plugins/toolchains.
+val generateFirebaseConfiguration by tasks.registering {
+    doNotTrackState("Firebase client configuration is supplied locally")
+    doLast {
+        val source = listOf(file("google-services.json"), rootProject.file("google-services.json")).firstOrNull { it.isFile }
+        if (source != null && file("src/main/res/values/firebase-config.xml").exists()) throw GradleException("Use google-services.json or explicit Firebase resources, not both")
+        val config = if (source == null) emptyMap<String, String>() else {
+            val json = groovy.json.JsonSlurper().parse(source) as Map<*, *>
+            val project = json["project_info"] as? Map<*, *> ?: throw GradleException("Firebase project_info is missing")
+            val client = (json["client"] as? List<*>)?.mapNotNull { it as? Map<*, *> }?.firstOrNull {
+                ((it["client_info"] as? Map<*, *>)?.get("android_client_info") as? Map<*, *>)?.get("package_name") == "com.vector.messenger"
+            } ?: throw GradleException("Firebase configuration must contain Android package com.vector.messenger")
+            val info = client["client_info"] as Map<*, *>
+            val key = (client["api_key"] as? List<*>)?.mapNotNull { (it as? Map<*, *>)?.get("current_key")?.toString() }?.firstOrNull()
+            mapOf("applicationId" to info["mobilesdk_app_id"].toString(), "projectId" to project["project_id"].toString(),
+                "senderId" to project["project_number"].toString(), "apiKey" to key.orEmpty()).also { values ->
+                if (values.values.any { it.isBlank() || it == "null" }) throw GradleException("Incomplete Firebase Android client configuration; values are not printed")
+            }
+        }
+        val output = layout.buildDirectory.file("generated/firebaseAssets/firebase-client.json").get().asFile
+        output.parentFile.mkdirs()
+        output.writeText(groovy.json.JsonOutput.toJson(config))
+        // Standard resources let FirebaseInitProvider initialize before a cold FCM receiver.
+        // The assets fallback alone would be too late for SDK components started before onCreate.
+        fun xml(value: String) = value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        val names = mapOf("applicationId" to "google_app_id", "projectId" to "project_id", "senderId" to "gcm_defaultSenderId", "apiKey" to "google_api_key")
+        val resources = layout.buildDirectory.file("generated/firebaseRes/values/firebase-client.xml").get().asFile
+        resources.parentFile.mkdirs()
+        resources.writeText("<resources>" + config.entries.joinToString("") { (key, value) ->
+            "<string name=\"${names.getValue(key)}\" translatable=\"false\" formatted=\"false\">${xml(value)}</string>"
+        } + "</resources>")
+    }
+}
+tasks.named("preBuild").configure { dependsOn(generateFirebaseConfiguration) }

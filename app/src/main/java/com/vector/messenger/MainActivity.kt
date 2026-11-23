@@ -28,7 +28,7 @@ import dagger.hilt.android.AndroidEntryPoint
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     @javax.inject.Inject lateinit var notifications: com.vector.messenger.notifications.TelegramNotifications
-    override fun onStart() { super.onStart(); notifications.foreground = true; notifications.refreshPushToken() }
+    override fun onStart() { super.onStart(); notifications.foreground = true }
     override fun onStop() { notifications.foreground = false; super.onStop() }
     private val chats: ChatsViewModel by viewModels()
     private val preferences: PreferencesViewModel by viewModels()

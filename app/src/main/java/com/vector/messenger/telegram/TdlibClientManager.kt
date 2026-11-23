@@ -52,6 +52,7 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
     private val activityEvents = MutableSharedFlow<AvatarEnvelope>(extraBufferCapacity = 128)
     internal val activityUpdates = activityEvents.asSharedFlow().filter { it.epoch == sessionEpoch && authorized }.map { it.value }
     private val notificationTypes = setOf("updateChatReadInbox", "updateUser", "updateNotificationGroup", "updateNotification", "updateActiveNotifications", "updateHavePendingNotifications", "updateFile", "updateChatPhoto", "updateChatNotificationSettings", "updateScopeNotificationSettings", "updateMessageSendSucceeded", "updateMessageSendFailed")
+    private val pushNotificationTypes = setOf("updateActiveNotifications", "updateNotificationGroup", "updateNotification", "updateHavePendingNotifications")
     private class NotificationEnvelope(val epoch: Long, val value: JSONObject, val done: CompletableDeferred<Unit>? = null)
     private val notificationEvents = Channel<NotificationEnvelope>(Channel.UNLIMITED)
     internal val notificationUpdates = kotlinx.coroutines.flow.flow {
@@ -65,9 +66,17 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
         notificationEvents.send(NotificationEnvelope(sessionEpoch, request("defaultNotificationDrain"), done))
         withTimeout(15_000) { done.await() }
     }
-    internal suspend fun processNotificationPush(payload: String): JSONObject = withContext(Dispatchers.IO) {
+    internal suspend fun pushReceiverId(payload: String): Long = withContext(Dispatchers.IO) {
+        // Documented synchronous API; no new client or manual push decryption.
+        JsonClient.execute(request("setLogStream", "log_stream" to request("logStreamEmpty")).toString())
+        val result = JSONObject(JsonClient.execute(request("getPushReceiverId", "payload" to payload).toString()) ?: error("Push receiver unavailable"))
+        check(result.optString("@type") == "pushReceiverId")
+        result.exactLong("id")
+    }
+    internal suspend fun processNotificationPush(payload: String, expectedAccount: Long): JSONObject = withContext(Dispatchers.IO) {
         start()
         if (clientId == 0) return@withContext request("error", "code" to 503)
+        if (selfId != 0L && selfId != expectedAccount) return@withContext request("error", "code" to 403)
         send(request("processPushNotification", "payload" to payload))
     }
     private val mediaTypes = setOf("updateFile", "updateFileAddedToDownloads", "updateFileDownload", "updateFileRemovedFromDownloads")
@@ -145,9 +154,15 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                                 if (authorized && selfPhotoId != 0 && file.optInt("id") == selfPhotoId)
                                     mapProfileFile(file, files, database)?.let { profileEvents.emit(ProfileUpdate.Photo(it)) }
                             }
-                            "updateConnectionState" -> connectionState.value = mapProfileConnection(json.optJSONObject("state") ?: JSONObject())
+                            "updateConnectionState" -> {
+                                val next = mapProfileConnection(json.optJSONObject("state") ?: JSONObject())
+                                if (next != connectionState.value) com.vector.messenger.notifications.PushDiagnostics.event("TDLib connection=${next.name}")
+                                connectionState.value = next
+                            }
                         }
-                        if (authorized && json.optString("@type") in notificationTypes) notificationEvents.send(NotificationEnvelope(sessionEpoch, json))
+                        if (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0 && json.optString("@type") in setOf("updateNewMessage", "updateActiveNotifications", "updateNotificationGroup"))
+                            android.util.Log.d("DefaultNotificationTrace", "TDLib received ${json.optString("@type")} authorized=$authorized")
+                        if (json.optString("@type") in notificationTypes && (authorized || json.optString("@type") in pushNotificationTypes)) notificationEvents.send(NotificationEnvelope(sessionEpoch, json))
                         if (authorized && json.optString("@type") in messagingTypes) messagingEvents.send(MessagingEnvelope(sessionEpoch, json))
                         if (authorized && json.optString("@type") in mediaTypes) mediaEvents.emit(json)
                         if (authorized && json.optString("@type") in activityTypes) activityEvents.emit(AvatarEnvelope(sessionEpoch, json))

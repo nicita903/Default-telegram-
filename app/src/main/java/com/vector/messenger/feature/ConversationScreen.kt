@@ -380,9 +380,8 @@ private fun MessageBubble(message: Message, reply: Message?, position: MessageGr
                 change.consume(); drag = max(0f, drag + amount).coerceAtMost(replyDistance * 1.2f)
             }
         }
-        .background(if (outgoing) colors.outgoing else colors.panel.copy(alpha = .78f), shape)
-        .then(Modifier.designFrame(shape, tint = if (outgoing) colors.accent.copy(alpha = .30f) else colors.text.copy(alpha = .07f)))
-        .combinedClickable(indication = null, interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, onClick = {}, onLongClick = onActions,
+            .background(if (outgoing) colors.outgoing else colors.panel.copy(alpha = .78f), shape)
+                .combinedClickable(indication = null, interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, onClick = {}, onLongClick = onActions,
             onDoubleClick = if (canDoubleReact) ({
                 if (feedbackJob?.isActive != true) {
                     currentReaction("❤")

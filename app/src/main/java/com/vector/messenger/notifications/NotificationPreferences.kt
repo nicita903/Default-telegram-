@@ -7,14 +7,14 @@ import javax.inject.Singleton
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-data class NotificationPreferences(val enabled: Boolean = true, val hideContent: Boolean = true, val groups: Boolean = true)
+data class NotificationPreferences(val enabled: Boolean = true, val hideContent: Boolean = false, val groups: Boolean = true)
 
 @Singleton
 class NotificationPreferenceStore @Inject constructor(@ApplicationContext context: Context) {
     // Share the existing device-preferences storage, without persisting notification content.
     private val prefs = context.getSharedPreferences("appearance_v2", Context.MODE_PRIVATE)
     private val mutable = MutableStateFlow(NotificationPreferences(prefs.getBoolean("notifications.enabled", true),
-        prefs.getBoolean("notifications.hideContent", true), prefs.getBoolean("notifications.groups", true)))
+        prefs.getBoolean("notifications.hideContent", false), prefs.getBoolean("notifications.groups", true)))
     val state = mutable.asStateFlow()
     fun update(change: (NotificationPreferences) -> NotificationPreferences) {
         val value = change(mutable.value)

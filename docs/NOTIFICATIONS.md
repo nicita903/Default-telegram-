@@ -1,31 +1,47 @@
-# Native message notifications
+# Background message delivery
 
-Uses the existing official TDLib JSON client pinned to c8828d50f5eac2fc7089ce1089d7ce9095c61b5e. Only updateNotificationGroup/updateNotification/updateActiveNotifications create message notifications. updateHavePendingNotifications coordinates background completion. notification_group_count_max and notification_group_size_max are configured only after authorization and successful account loading. TDLib queues setOption requests before setTdlibParameters, so initialization must never await them first. Application starts authentication independently; notification/Firebase failures are isolated and logged using fixed, non-sensitive diagnostic messages. No second updateNewMessage alert path exists.
+## Confirmed configuration gap
 
-Channels: messages_v1, groups_v1, mentions_v1. Android owns sounds/vibration and lock-screen preferences. No fake calls or permanent connection service. Settings > Notifications explains and requests Android 13 notification access once; denial never blocks messaging. Hidden previews hide both content and identity, omit conversation shortcuts/avatars and disable notification actions that could disclose content.
+At the reliability audit, neither app/google-services.json, root google-services.json, nor app/src/main/res/values/firebase-config.xml existed. Firebase dependencies/service declarations alone do not enable push. In that state there is no FCM token or confirmed Telegram push subscription: only the live process-owned TDLib connection can discover new messages. Android can suspend or terminate that process, leaving messages to be discovered on reconnect. No foreground service or polling loop is added to mask this gap.
 
-Conversation tags and PendingIntent data include provider/account/chat. Native RemoteInput replies use the existing sendText adapter and require the original current Telegram account at the transport boundary. A consumed action nonce is persisted before sending: uncertain sends are never automatically repeated. TDLib success/failure events update reply state. Read calls viewMessages(force_read=true, messageSourceNotification); mute copies all existing chat notification fields and changes only mute_for/use_default_mute_for. Swiping away removes TDLib notification groups without marking chat read.
+## Required developer setup
 
-## Push setup required
+1. Register Android package **com.vector.messenger** in your real Firebase project. Download its Android client google-services.json and place it at **app/google-services.json** (ignored by Git). The existing build now validates that package and generates standard early-initialization Firebase resources and fallback client assets; no Google Services plugin, toolchain upgrade, or placeholder credentials are needed. The root google-services.json location and the existing explicit Firebase resource configuration are also supported.
+2. Rebuild/install in place. Firebase initializes independently of authentication, obtains its token, and enables FCM auto-init. A missing/invalid configuration is diagnosed; Telegram login continues using its existing database/key.
+3. The matching sender/project must also be accepted and configured for the Telegram developer application/API ID. TDLib's DeviceToken documentation requires correct platform and server authentication data for the push provider. Confirm Telegram's supported provisioning route for your developer application; simply getting an FCM token or creating a Firebase project does not establish that association. Service-account credentials belong in authorized server/provider configuration, **never in this Android project/APK**.
+4. Verify a real **registerDevice -> pushReceiverId** receipt. The app persists account-specific receiver ID, token hash (not the raw token), and confirmation time. It reuses a recent confirmed receipt, reconciles changed tokens, and invalidates the logged-out account's receipt. Failure retries are event-driven and rate-limited; Activity resumes do not fetch/re-register a token each time.
+5. Test real Telegram delivery. A registration receipt proves only that TDLib accepted registration, not that Telegram's sender configuration and FCM transport actually deliver.
 
-The app contains FirebaseMessagingService, token refresh/registerDevice(encrypt=true), processPushNotification, and bounded expedited WorkManager handoffs. All queued payloads/reply text are encrypted with an Android Keystore AES-GCM key in noBackupFilesDir; only opaque filenames enter WorkManager. Authentication restores the same existing encrypted TDLib session. No polling or permanent foreground service is used. Firebase is optional and not initialized when configuration is absent.
+## Execution paths and isolation
 
-1. Register Android package com.vector.messenger in your actual Firebase project. Obtain the real Android client configuration (google-services.json). No Google Services Gradle plugin is required for this project: create the ignored app/src/main/res/values/firebase-config.xml with the corresponding resources from that client:
+Foreground messaging retains the existing single TDLib manager, encrypted database directories and authentication flow. Android network callbacks notify that client via setNetworkType; they do not recreate it. TDLib connection state remains the source of truth. Notification initialization never gates setTdlibParameters or getMe.
 
-```xml
-<resources>
-    <string name="google_app_id" translatable="false">YOUR mobilesdk_app_id</string>
-    <string name="gcm_defaultSenderId" translatable="false">YOUR project_number</string>
-    <string name="google_api_key" translatable="false">YOUR current_key</string>
-    <string name="project_id" translatable="false">YOUR project_id</string>
-</resources>
-```
+Background FCM messages are handed to an encrypted atomic file in noBackupFilesDir. WorkManager stores only its opaque filename. Received high-priority pushes request expedited work, with an explicitly documented normal-job fallback when quota is unavailable; normal-priority pushes use ordinary work. The Firebase callback also allows up to four seconds of immediate processing after durable enqueue. A shared per-event gate and bounded persisted completion ledger prevent callback/worker duplicate processing. Workers have bounded processing and retry counts, not periodic polling.
 
-Use matching project_info/client values from your downloaded configuration, XML-escape them, and rebuild. Never put a service-account private key in the application. Client configuration ships in the APK; restrict the Firebase API key to the intended Android app.
-2. Configure the matching Android push sender/server authorization for your Telegram application at my.telegram.org as required by Telegram. Firebase token registration alone is insufficient. Confirm Telegram accepts the sender configuration available for your developer application.
-3. Run on a Google Play Services device, authenticate, allow notifications in Settings, and reopen Default. Token refresh registers the current account. Encrypted data pushes are passed only to TDLib; do not send Firebase notification-display payloads, which Android could display independently of TDLib/privacy settings.
-4. Verify real messages with another Telegram account while foregrounded, backgrounded and after process termination. Android force-stop disables delivery until the user launches the app again. OEM power restrictions, connectivity and push quotas can delay execution.
+getPushReceiverId is executed through the pinned official TDLib JSON API. The resulting subscription is matched to the current registered account before processPushNotification. Currently the product owns one Telegram session: another account's receiver is not silently fed into it or used to create a second client. Account-qualified receipt keys allow a future session registry to dispatch additional existing account managers. Encrypted payloads are interpreted/decrypted only by TDLib. Notification updates emitted during native initialization are buffered and epoch-filtered until account handling is ready. A drain barrier waits for notification rendering before background work is marked complete.
 
-Device testing has not been performed for this implementation. Verify direct replies and failure handling, mark-read across other clients, mute/unmute, permission denial, hidden previews/lock screen, native grouping, cached avatars, correct-account cold starts and push delivery before reporting end-to-end reliability. Existing cached small avatars use MediaImages; notifications never fetch full-size avatars. Without Firebase and Telegram sender configuration, live TDLib notifications work while its process/connection remains alive; process-death delivery is unavailable.
+TDLib notification groups remain the sole message-alert producer. Push callbacks and updateNewMessage do not independently build alerts. Stable provider/account/chat tags, native message IDs, and persisted dismissal watermarks reconcile pushes, reconnects, edits, and removals. Existing Quick Reply, mark-read, mute, avatars, preview privacy and active-chat suppression remain intact. Chat entry cancels the exact native tag/id and removes TDLib notification groups without manufacturing read receipts.
 
-Official references: https://core.telegram.org/tdlib/options ; https://github.com/tdlib/td/blob/c8828d50f5eac2fc7089ce1089d7ce9095c61b5e/td/generate/scheme/td_api.tl ; https://firebase.google.com/docs/cloud-messaging/android/client
+Channels remain messages_v1, groups_v1 and mentions_v1. Existing user channel choices are preserved. Channel importance does not raise FCM transport priority. Telegram controls sender-side push priority; FCM/Android can defer normal-priority delivery in Doze, and expedited jobs are quota-limited. Explicit Android Force Stop generally prevents push restart until the user launches Default again. No bypass, battery exemption, or permanent connection foreground service is implemented.
+
+## Safe diagnostics
+
+Logcat tag **DefaultPush** records timestamps, generated/hash correlation references, and fixed stages: Firebase initialized/configuration missing; FCM token available; Telegram registration attempted/succeeded/failed; FCM push received and received priority; work enqueued/started; receiver resolved/unavailable; processing started/completed/rejected; Android notification posted; TDLib connection-state changes. Tokens, account IDs, native error descriptions, sender names, message text and payloads are excluded. Existing debug-only DefaultNotificationTrace remains available for renderer decisions.
+
+## Verification still required after setup
+
+- A: Foreground incoming messages synchronize; one notification at most.
+- B: Launcher confirmed foreground; a real incoming message notifies without reopening Default; tap opens its chat.
+- C: Ordinary process termination (not Force Stop); a real Telegram push starts the service/worker and posts without an Activity.
+- D: Locked screen/Doze; record received FCM priority and actual receive-to-post latency.
+- E: Wi-Fi/mobile/VPN changes; same client/session reconnects, without resets.
+- F: Multiple messages consolidate by conversation and do not re-alert on push replacement.
+- G: Open one of two notified chats; only that chat clears, normal read-state rules remain.
+- H: Force Stop restriction documented; do not claim a bypass or disable it for testing.
+
+No live background-delivery test is claimed before Firebase and Telegram sender provisioning are complete. Device audit found Google Play Services installed, standby bucket Active (10), and no explicit RUN_ANY_IN_BACKGROUND app-op denial. Those checks do not prove FCM delivery or rule out OEM/Doze restrictions.
+
+Official references:
+- https://core.telegram.org/tdlib/notification-api
+- https://github.com/tdlib/td/blob/c8828d50f5eac2fc7089ce1089d7ce9095c61b5e/td/generate/scheme/td_api.tl
+- https://firebase.google.com/docs/cloud-messaging/android/message-priority

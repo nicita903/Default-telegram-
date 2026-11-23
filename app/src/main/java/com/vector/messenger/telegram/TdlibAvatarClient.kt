@@ -19,8 +19,8 @@ data class AvatarMemberPage(val members: List<AvatarIdentity>, val offset: Int, 
 class TdlibAvatarClient @Inject constructor(private val manager: TdlibClientManager) {
     val updates = manager.avatarUpdates
     val connection = manager.connection
-    suspend fun call(value: JSONObject): JSONObject {
-        val result = manager.messagingRequest(value)
+    suspend fun call(value: JSONObject, expectedAccount: Long? = null): JSONObject {
+        val result = manager.messagingRequest(value, expectedAccount)
         if (result.optString("@type") == "error") throw com.vector.core.messaging.MessagingException(
             if (result.optInt("code") in 500..599 || result.optInt("code") == 0) com.vector.core.messaging.MessagingFailure.Network
             else com.vector.core.messaging.MessagingFailure.Unavailable)
@@ -70,7 +70,7 @@ class TdlibAvatarClient @Inject constructor(private val manager: TdlibClientMana
         return AvatarPage(messages.mapNotNull { it.optJSONObject("content")?.optJSONObject("photo")?.let(::picture) }, 0, next,
             next != 0L && next != fromMessage && messages.isNotEmpty())
     }
-    suspend fun download(id: Int): JSONObject = call(request("downloadFile", "file_id" to id, "priority" to 1, "offset" to 0, "limit" to 0, "synchronous" to false))
+    suspend fun download(id: Int, expectedAccount: Long? = null): JSONObject = call(request("downloadFile", "file_id" to id, "priority" to 1, "offset" to 0, "limit" to 0, "synchronous" to false), expectedAccount)
     suspend fun members(owner: AvatarOwner, offset: Int): AvatarMemberPage {
         if (owner.user) return AvatarMemberPage(emptyList(), 0, false, false)
         val type = call(request("getChat", "chat_id" to owner.id)).optJSONObject("type")
