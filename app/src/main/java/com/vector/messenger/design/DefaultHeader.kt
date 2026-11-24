@@ -1,6 +1,7 @@
 package com.vector.messenger.design
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -23,6 +24,7 @@ fun DefaultHeader(
     avatarName: String? = null, avatarPhoto: com.vector.core.profile.ProfilePhoto? = null,
     avatarId: Long = 0, avatarUser: Boolean = false,
     subtitleContent: (@Composable () -> Unit)? = null,
+    onContact: (() -> Unit)? = null,
 ) {
     val colors = DefaultDesign.colors
     Box(
@@ -50,8 +52,8 @@ fun DefaultHeader(
             Modifier.align(Alignment.Center).fillMaxWidth().padding(horizontal = 56.dp).heightIn(min = 48.dp),
             verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center,
         ) {
-            avatarName?.let { TelegramAvatar(it, avatarPhoto, 36.dp, avatarId, avatarUser); Spacer(Modifier.width(10.dp)) }
-            Column(Modifier.weight(1f, fill = false), horizontalAlignment = Alignment.CenterHorizontally,
+            avatarName?.let { TelegramAvatar(it, avatarPhoto, 36.dp, avatarId, avatarUser, onClick = onContact); Spacer(Modifier.width(10.dp)) }
+            Column(Modifier.weight(1f, fill = false).then(if (onContact != null) Modifier.clickable(onClickLabel = "Open contact profile", onClick = onContact) else Modifier), horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text(title, style = MaterialTheme.typography.titleLarge, color = colors.text, maxLines = 1,
                     overflow = TextOverflow.Ellipsis, textAlign = androidx.compose.ui.text.style.TextAlign.Center)

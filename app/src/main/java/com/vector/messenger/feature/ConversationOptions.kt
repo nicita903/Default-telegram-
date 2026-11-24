@@ -18,12 +18,15 @@ import com.vector.messenger.navigation.gesture.excludeModuleGestures
 fun ConversationOptions(chat: Chat, viewModel: ChatsViewModel) {
     var open by remember(chat.id) { mutableStateOf(false) }
     val messages by viewModel.messages.collectAsStateWithLifecycle()
+    val status by viewModel.status.collectAsStateWithLifecycle()
     val offset = with(LocalDensity.current) { 48.dp.roundToPx() }
     Box(Modifier.excludeModuleGestures()) {
         DefaultIconControl(Icons.Default.MoreVert, "Chat options", { open = true }, quiet = true)
         DefaultActionMenu(open, { open = false }, IntOffset(0, offset)) {
             fun choose(name: String) { open = false; viewModel.showChatTool(chat.id, name) }
             DefaultAction("Conversation info", { choose("info") }, Modifier.fillMaxWidth())
+            if (status.live) chat.userId?.let { com.vector.messenger.calling.VoiceCallButton(it) }
+            if (status.live && chat.userId != null) DefaultAction("Telegram call history", { choose("calls") }, Modifier.fillMaxWidth())
             DefaultAction("Search in chat", { choose("search") }, Modifier.fillMaxWidth())
             if (messages.any { it.chatId == chat.id && it.media != null && !it.restricted })
                 DefaultAction("Shared media", { choose("media") }, Modifier.fillMaxWidth())

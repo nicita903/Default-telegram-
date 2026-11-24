@@ -25,6 +25,11 @@ android {
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/telegramAssets"))
     sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/firebaseAssets"))
     sourceSets["main"].res.srcDir(layout.buildDirectory.dir("generated/firebaseRes"))
+    sourceSets["main"].assets.srcDir(layout.buildDirectory.dir("generated/callingAssets"))
+    sourceSets["main"].jniLibs.srcDir(layout.buildDirectory.dir("generated/callingJni"))
+    val rtcRoot = rootProject.file(".native/telegram-x-calls/app/jni/tgvoip/third_party/webrtc")
+    sourceSets["main"].java.srcDirs(listOf("sdk/android/api", "sdk/android/src/java", "rtc_base/java/src").map { rtcRoot.resolve(it) })
+    sourceSets["main"].java.srcDir(rootProject.file(".native/telegram-x-calls/thirdparty/WebRTC/src/java"))
     // Official Android CMake target already strips this prebuilt library; no SDK NDK install is needed by AGP.
     packaging { jniLibs { keepDebugSymbols += "**/libtdjsonjava.so" } }
     compileOptions {
@@ -149,3 +154,19 @@ val generateFirebaseConfiguration by tasks.registering {
     }
 }
 tasks.named("preBuild").configure { dependsOn(generateFirebaseConfiguration) }
+
+// Calling is packaged separately from the existing, independently verified TDLib inventory.
+val verifyCallingNative by tasks.registering {
+    doNotTrackState("Verify source-built call engine before packaging")
+    doLast {
+        val library = layout.buildDirectory.file("generated/callingJni/arm64-v8a/libdefault_calls.so").get().asFile
+        if (library.exists()) {
+            val manifestFile = rootProject.file("native/calling-manifest.json")
+            if (!manifestFile.exists()) throw GradleException("Calling native provenance missing. Run scripts/Build-CallingAndroid.ps1.")
+            val manifest = groovy.json.JsonSlurper().parse(manifestFile) as Map<*, *>
+            val sha = MessageDigest.getInstance("SHA-256").digest(library.readBytes()).joinToString("") { "%02x".format(it) }
+            if (manifest["sha256"] != sha || manifest["abi"] != "arm64-v8a") throw GradleException("Calling engine checksum/ABI mismatch.")
+        }
+    }
+}
+tasks.named("preBuild").configure { dependsOn(verifyCallingNative) }

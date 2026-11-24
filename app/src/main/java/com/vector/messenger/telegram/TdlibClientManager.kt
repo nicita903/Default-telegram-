@@ -45,6 +45,12 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
     private val avatarEvents = MutableSharedFlow<AvatarEnvelope>(extraBufferCapacity = 64)
     internal val avatarUpdates = avatarEvents.asSharedFlow()
         .filter { it.epoch == sessionEpoch && authorized }.map { it.value }
+    private val callTypes = setOf("updateCall", "updateNewCallSignalingData")
+    private val callEvents = Channel<AvatarEnvelope>(Channel.UNLIMITED)
+    internal val callUpdates = callEvents.receiveAsFlow().filter { it.epoch == sessionEpoch && authorized }.map { it.value }
+    private val contactLibraryTypes = setOf("updateNewMessage", "updateDeleteMessages", "updateMessageContent", "updateUser", "updateUserFullInfo", "updateChatNotificationSettings")
+    private val contactLibraryEvents = MutableSharedFlow<AvatarEnvelope>(extraBufferCapacity = 64)
+    internal val contactLibraryUpdates = contactLibraryEvents.asSharedFlow().filter { it.epoch == sessionEpoch && authorized }.map { it.value }
     private val storyTypes = setOf("updateStory", "updateStoryDeleted", "updateStoryPostSucceeded", "updateStoryPostFailed", "updateChatActiveStories", "updateFile")
     private val storyEvents = MutableSharedFlow<AvatarEnvelope>(extraBufferCapacity = 64)
     internal val storyUpdates = storyEvents.asSharedFlow().filter { it.epoch == sessionEpoch && authorized }.map { it.value }
@@ -167,6 +173,8 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                         if (authorized && json.optString("@type") in mediaTypes) mediaEvents.emit(json)
                         if (authorized && json.optString("@type") in activityTypes) activityEvents.emit(AvatarEnvelope(sessionEpoch, json))
                         if (authorized && json.optString("@type") in storyTypes) storyEvents.emit(AvatarEnvelope(sessionEpoch, json))
+                        if (authorized && json.optString("@type") in callTypes) callEvents.send(AvatarEnvelope(sessionEpoch, json))
+                        if (authorized && json.optString("@type") in contactLibraryTypes) contactLibraryEvents.emit(AvatarEnvelope(sessionEpoch, json))
                         if (authorized && json.optString("@type") in avatarTypes) avatarEvents.emit(AvatarEnvelope(sessionEpoch, json))
                         if (authorized && (json.optString("@type") == "updateUserPrivacySettingRules" || json.optString("@type") == "updateUser")) ghostEvents.emit(json)
                         if (json.optString("@type") != "updateAuthorizationState") continue

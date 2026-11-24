@@ -92,6 +92,7 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
     val gestureConfig = VectorGestureConfig(distance = appearance.distance.dp, holdMillis = appearance.hold.toLong())
     val allChats by chats.chats.collectAsStateWithLifecycle()
     val chatStatus by chats.status.collectAsStateWithLifecycle()
+    var contactProfileChat by rememberSaveable(chatStatus.session) { mutableStateOf<Long?>(null) }
     val contact = allChats.find { it.id == entry?.arguments?.getLong("chatId") }
     val subtitleSource = remember(entry?.id, contact?.userId, contact?.kind, chatStatus.session, chatStatus.live) {
         if (conversation && chatStatus.live && contact != null) chats.subtitle(contact.id, contact.userId, contact.kind)
@@ -129,7 +130,7 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
         val target = notificationDestination ?: return@LaunchedEffect
         if (!chatStatus.live) return@LaunchedEffect
         if (notificationHost?.resolveDestination(target) == true) {
-            closeSearch(); profileOpen = false; transientChats = false; menu = false; newMessage = false
+            closeSearch(); contactProfileChat = null; profileOpen = false; transientChats = false; menu = false; newMessage = false
             navigation.select(AppModule.Chats)
             val chatNav = controllers.getValue(AppModule.Chats)
             if (chatNav.currentBackStackEntry?.arguments?.getLong("chatId") != target.chat || chatNav.currentBackStackEntry?.destination?.route != Routes.Conversation) {
@@ -215,6 +216,7 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                         avatarPhoto = if (conversation) contact?.photo else null,
                         avatarId = if (conversation) contact?.let { it.userId ?: it.id } ?: 0 else 0,
                         avatarUser = conversation && contact?.userId != null,
+                        onContact = if (conversation && chatStatus.live && contact != null) ({ contactProfileChat = contact.id }) else null,
                         // Root controls stay on the edges; nested screens retain their Back action.
                         leading = {
                             if (internalBack || searchVisible) {
@@ -301,6 +303,11 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                 controllers.getValue(AppModule.Chats).popBackStack(AppModule.Chats.name, false)
                 searchScopeName = SearchScope.Chats.name; searchOpen = true; menu = false
             })
+            contactProfileChat?.let { id ->
+                ContactProfileScreen(id, onClose = { contactProfileChat = null },
+                    onSearch = { contactProfileChat = null; chats.showChatTool(id, "search") })
+            }
+            com.vector.messenger.calling.VoiceCallHost()
             // Also cover a quick Back before the dialog window has acquired input focus.
             BackHandler(enabled = menu) { menu = false }
             if (newMessage) DefaultDialog("New message", onDismiss = { newMessage = false }) {

@@ -81,7 +81,9 @@ internal fun mapTelegramMessage(json: JSONObject): Message {
     val retryAfter = sending?.optDouble("retry_after", 0.0)?.coerceAtLeast(0.0) ?: 0.0
     return Message(
         id = json.getLong("id"), chatId = json.getLong("chat_id"),
-        text = if (blocked) "Content unavailable in this client" else contentText(content),
+        text = if (blocked) "Content unavailable in this client" else com.vector.messenger.calling.mapTelegramCall(json)?.let { call ->
+            call.description + if (call.seconds > 0) " · ${call.seconds / 60}:${(call.seconds % 60).toString().padStart(2, '0')}" else ""
+        } ?: contentText(content),
         time = telegramTime(json.optLong("date")),
         delivery = when { failed -> Delivery.Failed; sending != null -> Delivery.Sending; outgoing -> Delivery.Sent; else -> Delivery.Received },
         replyTo = json.optJSONObject("reply_to")?.takeIf { it.optString("@type") == "messageReplyToMessage" }?.optLong("message_id")?.takeIf { it != 0L },

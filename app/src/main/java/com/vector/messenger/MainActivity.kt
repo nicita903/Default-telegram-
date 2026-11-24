@@ -41,6 +41,9 @@ class MainActivity : ComponentActivity() {
     private val media: com.vector.messenger.feature.media.MediaViewModel by viewModels()
     private val audio: com.vector.messenger.feature.audio.AudioViewModel by viewModels()
     private val voice: com.vector.messenger.feature.audio.VoiceViewModel by viewModels()
+    @javax.inject.Inject lateinit var voiceCalls: com.vector.messenger.calling.TelegramVoiceCalls
+    private val callHistory: com.vector.messenger.calling.CallHistoryViewModel by viewModels()
+    private val contactProfile: com.vector.messenger.feature.profile.ContactProfileViewModel by viewModels()
     private val videoNotes: com.vector.messenger.feature.video.VideoNoteViewModel by viewModels()
     private val music: com.vector.messenger.feature.music.MusicViewModel by viewModels()
     override fun onNewIntent(intent: android.content.Intent) {
@@ -72,6 +75,9 @@ class MainActivity : ComponentActivity() {
                 com.vector.messenger.feature.audio.LocalAudioViewModel provides audio,
                 com.vector.messenger.feature.audio.LocalVoiceViewModel provides voice,
                 com.vector.messenger.feature.video.LocalVideoNotes provides videoNotes,
+                com.vector.messenger.feature.profile.LocalContactProfileViewModel provides contactProfile,
+                com.vector.messenger.calling.LocalCallHistory provides callHistory,
+                com.vector.messenger.calling.LocalVoiceCalls provides voiceCalls,
                 com.vector.messenger.feature.avatar.LocalAvatarViewModel provides avatars,
                 com.vector.messenger.feature.profile.LocalProfileModuleViewModel provides profileModule,
                 com.vector.messenger.feature.avatar.LocalAccountAction provides { accountOpen = true },

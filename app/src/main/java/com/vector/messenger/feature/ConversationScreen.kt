@@ -315,6 +315,7 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
         }
         DefaultAction("Done", { chatTool = null })
     }
+    if (chatTool == "calls") com.vector.messenger.calling.CallHistoryDialog(chatId) { chatTool = null }
     if (chatTool == "search") DefaultDialog("Search in chat", { chatTool = null }) {
         DefaultInput(chatSearch, { chatSearch = it }, "Search loaded messages", Modifier.fillMaxWidth())
         Text("Searches currently loaded history.", color = colors.secondary, style = MaterialTheme.typography.bodySmall)
