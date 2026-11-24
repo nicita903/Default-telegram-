@@ -67,18 +67,7 @@ fun DefaultFloatingDialog(title: String, onDismiss: () -> Unit, content: @Compos
     val available = backdropBlurAvailable()
     Dialog(onDismissRequest = onDismiss,
         properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false)) {
-        val window = (LocalView.current.parent as? DialogWindowProvider)?.window
-        DisposableEffect(window, settings.reducedMotion, settings.intensity, available) {
-            window?.apply {
-                setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
-                addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
-                attributes = attributes.apply {
-                    dimAmount = if (available) .48f else .78f
-                    windowAnimations = if (VectorMotionSpec.strength(settings) == 0f) 0 else R.style.DefaultFloatingWindowAnimation
-                }
-            }
-            onDispose { /* The window is dismissed by Compose; no retained overlay or job. */ }
-        }
+        ConfigureFloatingWindow()
         CompositionLocalProvider(LocalFloatingContent provides true) {
             // Wrap content, rather than a fullscreen hit target: outside taps still dismiss.
             Column(Modifier.safeDrawingPadding().imePadding().padding(24.dp)
@@ -93,3 +82,32 @@ fun DefaultFloatingDialog(title: String, onDismiss: () -> Unit, content: @Compos
         }
     }
 }
+
+/** Borderless modal using the same scene blur, dimming, focus and window motion as dialogs. */
+@Composable
+fun DefaultFloatingOverlay(onDismiss: () -> Unit, content: @Composable () -> Unit) {
+    RegisterFloatingBackdrop()
+    Dialog(onDismissRequest = onDismiss, properties = DialogProperties(usePlatformDefaultWidth = false,
+        decorFitsSystemWindows = false, securePolicy = androidx.compose.ui.window.SecureFlagPolicy.SecureOn)) {
+        ConfigureFloatingWindow()
+        CompositionLocalProvider(LocalFloatingContent provides true) { content() }
+    }
+}
+
+@Composable
+private fun ConfigureFloatingWindow() {
+    val settings = LocalAppearance.current
+    val available = backdropBlurAvailable()
+        val window = (LocalView.current.parent as? DialogWindowProvider)?.window
+        DisposableEffect(window, settings.reducedMotion, settings.intensity, available) {
+            window?.apply {
+                setBackgroundDrawable(ColorDrawable(android.graphics.Color.TRANSPARENT))
+                addFlags(WindowManager.LayoutParams.FLAG_DIM_BEHIND)
+                attributes = attributes.apply {
+                    dimAmount = if (available) .48f else .78f
+                    windowAnimations = if (VectorMotionSpec.strength(settings) == 0f) 0 else R.style.DefaultFloatingWindowAnimation
+                }
+            }
+            onDispose { /* The window is dismissed by Compose; no retained overlay or job. */ }
+        }
+ }

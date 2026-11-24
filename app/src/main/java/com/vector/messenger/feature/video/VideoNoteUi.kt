@@ -140,24 +140,30 @@ private fun LocalVideoPreview(path: String, key: String) {
 
 @Composable
 fun VideoNoteMessage(item: MediaItem, media: MediaViewModel, visible: Boolean, autoCandidate: Boolean,
-    delivery: Delivery?, canRetry: Boolean, onRetry: () -> Unit, onCancel: () -> Unit, onReaction: () -> Unit, onActions: () -> Unit) {
+    delivery: Delivery?, canRetry: Boolean, onRetry: () -> Unit, onCancel: () -> Unit, onReaction: () -> Unit, onActions: () -> Unit, onOpen: (() -> Unit)? = null) {
     val vm = LocalVideoNotes.current ?: return
     val transfer by remember(media, item.media.file.id, item.media.thumbnail?.id) { media.observe(item) }.collectAsStateWithLifecycle(initialValue = MediaPresentation())
     val key = "${transfer.session}:${item.chatId}:${item.messageId}"
     val playback by remember(key, vm) { vm.playback.state.map { if (it.key == key) it else VideoNotePlaybackState() }.distinctUntilChanged() }.collectAsStateWithLifecycle(initialValue = VideoNotePlaybackState())
     val autoplay by vm.autoplay.collectAsStateWithLifecycle()
     val reduced = LocalAppearance.current.reducedMotion
+    val viewerOpen by vm.playback.viewerOpen.collectAsStateWithLifecycle()
     val file = transfer.file
     val path = file?.path?.takeIf { file.complete }
     var pendingPlay by remember(key) { mutableStateOf(false) }
     val thumbnail = transfer.thumbnail
-    val image by produceState<DecodedMediaImage?>(null, thumbnail?.path, transfer.session) { value = thumbnail?.path?.let { MediaImages.load(it, 320, transfer.session) } }
+    val context = LocalContext.current
+    val image by produceState<DecodedMediaImage?>(null, thumbnail?.path, path, transfer.session) {
+        value = thumbnail?.path?.let { MediaImages.load(it, 320, transfer.session) }
+            ?: path?.let { MediaImages.loadVideoUri(context, android.net.Uri.fromFile(java.io.File(it)).toString(), transfer.session, 320) }
+    }
     LaunchedEffect(item.media.file.id, item.media.thumbnail?.id, transfer.session) {
         item.media.thumbnail?.let { media.preview(item.copy(media = item.media.copy(file = it, thumbnail = null))) }
         if (item.media.file.complete) media.preview(item)
     }
-    LaunchedEffect(visible, autoCandidate, autoplay, reduced, path, pendingPlay) {
-        if (!visible) { pendingPlay = false; vm.playback.stop(key) }
+    LaunchedEffect(visible, autoCandidate, autoplay, reduced, path, pendingPlay, viewerOpen) {
+        if (viewerOpen) { pendingPlay = false; vm.playback.stop(key) }
+        else if (!visible) { pendingPlay = false; vm.playback.stop(key) }
         else if (pendingPlay && path != null) { pendingPlay = false; vm.playback.start(key, path, false) }
         else if (autoCandidate && autoplay && !reduced && path != null && playback.key.isEmpty()) vm.playback.start(key, path, true)
         else if ((!autoCandidate || !autoplay || reduced) && vm.playback.state.value.key == key && vm.playback.state.value.automatic) vm.playback.stop(key)
@@ -165,33 +171,36 @@ fun VideoNoteMessage(item: MediaItem, media: MediaViewModel, visible: Boolean, a
     DisposableEffect(key) { onDispose { vm.playback.stop(key) } }
     LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.playback.stop(key) }
     Column(Modifier.widthIn(max = 240.dp).excludeModuleGestures(), horizontalAlignment = Alignment.CenterHorizontally) {
-        Box(Modifier.fillMaxWidth().aspectRatio(1f).clip(CircleShape).combinedClickable(onLongClick = onActions, onDoubleClick = onReaction, onClick = {
-            if (playback.key == key) vm.playback.toggle()
+        Box(Modifier.fillMaxWidth().aspectRatio(1f)) {
+        Box(Modifier.fillMaxSize().clip(CircleShape).combinedClickable(onLongClick = onActions, onDoubleClick = onReaction, onClick = {
+            if (onOpen != null) onOpen()
+            else if (playback.key == key) vm.playback.toggle()
             else if (path != null) vm.playback.start(key, path, false)
             else { pendingPlay = true; media.download(item) }
         }), contentAlignment = Alignment.Center) {
             if (image != null) androidx.compose.foundation.Image(image!!.bitmap.asImageBitmap(), null, Modifier.fillMaxSize(), contentScale = androidx.compose.ui.layout.ContentScale.Crop)
             if (playback.key == key && playback.player != null) CirclePlayer(playback.player!!)
-            if (playback.key.isEmpty() || !playback.playing) Text(if (file?.active == true) "${(file.progress * 100).toInt()}%" else if (playback.failed) "Retry" else "▶", color = DefaultDesign.colors.accent)
+            if (file?.active == true) Text("${(file.progress * 100).toInt()}%", color = DefaultDesign.colors.accent)
+            else if (playback.failed) Text("Retry", color = DefaultDesign.colors.accent)
+            else if (playback.key.isEmpty() || !playback.playing) VideoNotePlayGlyph()
             if (delivery == Delivery.Sending) {
                 val upload = file ?: item.media.file
                 Text(if (upload.size > 0) "${(100 * upload.uploaded / upload.size).coerceIn(0, 100)}%" else "Sending…", Modifier.align(Alignment.BottomCenter).padding(bottom = 16.dp), style = MaterialTheme.typography.labelSmall)
             }
         }
+        VideoNoteDuration(item.media.duration, Modifier.align(Alignment.BottomStart).padding(start = 6.dp, bottom = 4.dp))
+        }
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text("${if (playback.key.isNotEmpty()) playback.position / 1000 else item.media.duration}s", style = MaterialTheme.typography.labelSmall, color = DefaultDesign.colors.secondary)
-            if (playback.key.isNotEmpty()) DefaultAction(if (playback.muted) "Unmute" else "Mute", vm.playback::mute, compact = true)
             if (delivery == Delivery.Failed && canRetry) DefaultAction("Retry send", onRetry, compact = true)
             if (delivery == Delivery.Sending) DefaultAction("Cancel", onCancel, compact = true)
             if (file?.active == true && delivery != Delivery.Sending) DefaultAction("Pause download", { media.pause(item.media.file.id) }, compact = true)
         }
-        if (playback.key.isNotEmpty()) LinearProgressIndicator(progress = { if (playback.duration > 0) playback.position.toFloat() / playback.duration else 0f }, modifier = Modifier.fillMaxWidth())
     }
 }
 
 @androidx.annotation.OptIn(androidx.media3.common.util.UnstableApi::class)
 @Composable
-private fun CirclePlayer(player: androidx.media3.exoplayer.ExoPlayer) {
+internal fun CirclePlayer(player: androidx.media3.exoplayer.ExoPlayer) {
     AndroidView(factory = { context -> android.view.TextureView(context).apply { player.setVideoTextureView(this) } },
         update = { player.setVideoTextureView(it) }, modifier = Modifier.fillMaxSize(), onRelease = { player.clearVideoTextureView(it) })
 }

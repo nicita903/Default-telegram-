@@ -22,6 +22,10 @@ class VideoNotePlayback @Inject constructor(@ApplicationContext private val cont
     private val mutable = MutableStateFlow(VideoNotePlaybackState())
     val state = mutable.asStateFlow()
     private var ticker: Job? = null
+    private val viewerState = MutableStateFlow(false)
+    val viewerOpen = viewerState.asStateFlow()
+    fun viewer(open: Boolean) { if (open) stop(); viewerState.value = open }
+    fun seek(position: Long) { state.value.player?.let { it.seekTo(position.coerceIn(0, it.duration.coerceAtLeast(0))) } }
     init { scope.launch { combine(engine.state, engine.musicState) { audio, music -> audio.phase == AudioPhase.Playing || music.phase == AudioPhase.Playing }.distinctUntilChanged().collect { playing ->
         if (playing && !state.value.muted) pause()
     } } }

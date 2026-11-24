@@ -334,7 +334,13 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
         if (chatSearch.isNotBlank() && matches.isEmpty()) Text("No matching loaded messages", color = colors.secondary)
         DefaultAction("Done", { chatTool = null })
     }
-    mediaSelection?.let { id -> if (mediaViewModel != null) MediaViewer(if (mediaItems.find { it.messageId == id }?.media?.kind == MediaKind.Photo) mediaItems.filter { it.media.kind == MediaKind.Photo } else mediaItems, id, mediaViewModel) { mediaSelection = null } }
+    mediaSelection?.let { id -> if (mediaViewModel != null) {
+        if (mediaItems.find { it.messageId == id }?.media?.kind == MediaKind.VideoNote)
+            com.vector.messenger.feature.video.FloatingVideoNoteViewer(mediaItems, id, mediaViewModel,
+                history.hasMore, history.loading, history.error, { viewModel.older(chatId) }, { mediaSelection = null })
+        else MediaViewer(if (mediaItems.find { it.messageId == id }?.media?.kind == MediaKind.Photo)
+            mediaItems.filter { it.media.kind == MediaKind.Photo } else mediaItems.filter { it.media.kind != MediaKind.VideoNote }, id, mediaViewModel) { mediaSelection = null }
+    } }
     byId[actionsFor]?.let { selected ->
         DefaultDialog("Message", { actionsFor = null }) {
             if (!status.live) Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -396,7 +402,7 @@ private fun MessageBubble(message: Message, reply: Message?, position: MessageGr
                 change.consume(); drag = max(0f, drag + amount).coerceAtMost(replyDistance * 1.2f)
             }
         }
-            .background(if (videoCircle) androidx.compose.ui.graphics.Color.Transparent else if (outgoing) colors.outgoing else colors.panel.copy(alpha = .78f), shape)
+            .then(if (videoCircle) Modifier else Modifier.background(if (outgoing) colors.outgoing else colors.panel.copy(alpha = .78f), shape))
                 .combinedClickable(indication = null, interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, onClick = {}, onLongClick = onActions,
             onDoubleClick = if (canDoubleReact) ({
                 if (feedbackJob?.isActive != true) {
@@ -423,8 +429,16 @@ private fun MessageBubble(message: Message, reply: Message?, position: MessageGr
                 }
             }
             if (mediaItem != null && mediaViewModel != null) {
-                if (mediaItem.media.kind == MediaKind.VideoNote) com.vector.messenger.feature.video.VideoNoteMessage(mediaItem, mediaViewModel, statusVisible, videoAutoplay,
-                    message.delivery, message.canRetry, onRetryUpload, onCancelUpload, { onReaction("❤") }, onActions)
+                if (mediaItem.media.kind == MediaKind.VideoNote) Row(
+                    horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.Bottom) {
+                    Box(Modifier.weight(1f, fill = false)) {
+                        com.vector.messenger.feature.video.VideoNoteMessage(mediaItem, mediaViewModel, statusVisible, videoAutoplay,
+                            message.delivery, message.canRetry, onRetryUpload, onCancelUpload, { onReaction("❤") }, onActions, onOpen = onMedia)
+                    }
+                    Box(Modifier.padding(bottom = 6.dp)) {
+                        MessageTimestamp(message, statusVisible = statusVisible, transitions = statusTransitions, session = statusSession)
+                    }
+                }
                 else if (mediaItem.media.kind in listOf(MediaKind.Voice, MediaKind.Audio)) com.vector.messenger.feature.audio.VoiceAttachment(mediaItem, mediaViewModel)
                 else MediaAttachmentView(mediaItem, mediaViewModel, onMedia, message.delivery,
                     onCancelUpload, onRetryUpload, message.canRetry, message.retryAt)
@@ -432,7 +446,7 @@ private fun MessageBubble(message: Message, reply: Message?, position: MessageGr
             message.attachment?.let { attachment -> DefaultAction(attachment.name, { onOpenAttachment(attachment) }, Modifier.padding(bottom = 8.dp), VectorIcons.Attach) }
             // Both directions share a bottom-aligned, measured text/time line. Media and
             // reply previews above retain their width and existing interactive controls.
-            Row(Modifier.align(Alignment.End), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Bottom) {
+            if (!videoCircle) Row(Modifier.align(Alignment.End), horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.Bottom) {
                 if (message.text.isNotEmpty()) Text(message.text, Modifier.weight(1f, fill = false),
                     color = colors.text, style = MaterialTheme.typography.bodyLarge)
                 MessageTimestamp(message, statusVisible = statusVisible, transitions = statusTransitions, session = statusSession)
