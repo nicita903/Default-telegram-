@@ -117,9 +117,10 @@ fun FloatingAudioPlayer(onOpen: (Long) -> Unit) {
 }
 
 @Composable
-fun VoiceMicrophone(chatId: Long, reply: Long?, enabled: Boolean) {
+fun VoiceMicrophone(chatId: Long, reply: Long?, enabled: Boolean, onTap: (() -> Unit)? = null) {
     val vm = LocalVoiceViewModel.current ?: return
     val context = LocalContext.current
+    val currentTap by rememberUpdatedState(onTap)
     val currentReply by rememberUpdatedState(reply)
     val currentEnabled by rememberUpdatedState(enabled)
     val state by vm.state.collectAsStateWithLifecycle()
@@ -137,30 +138,34 @@ fun VoiceMicrophone(chatId: Long, reply: Long?, enabled: Boolean) {
     Box(Modifier.size(48.dp).excludeModuleGestures().background(DefaultDesign.colors.accent, DefaultDesign.controlShape)
         .semantics {
             contentDescription = "Record voice message"
-            onClick(label = "Start locked recording") {
+            customActions = listOf(CustomAccessibilityAction("Start locked voice recording") { if (currentEnabled) { if (allowed()) vm.start(chatId, currentReply, locked = true) else permission.launch(Manifest.permission.RECORD_AUDIO) }; true })
+            onClick(label = if (onTap != null) "Switch to video messages" else "Start locked recording") {
+                if (currentEnabled && currentTap != null) { currentTap?.invoke(); return@onClick true }
                 if (currentEnabled) { if (allowed()) vm.start(chatId, currentReply, locked = true) else permission.launch(Manifest.permission.RECORD_AUDIO) }; true
             }
         }.pointerInput(chatId, enabled) {
             if (!enabled) return@pointerInput
             awaitEachGesture {
                 val down = awaitFirstDown(requireUnconsumed = true)
-                if (!allowed()) { permission.launch(Manifest.permission.RECORD_AUDIO); return@awaitEachGesture }
                 val machine = VoiceGesture(72 * density, 64 * density)
                 var activated = false
                 var completed = false
                 try {
                     var eligible = true
+                    var tapped = false
                     val finishedEarly = withTimeoutOrNull(180) {
                         while (true) {
                             val event = awaitPointerEvent()
                             val change = event.changes.firstOrNull { it.id == down.id }
-                            if (event.changes.size != 1 || change == null || change.isConsumed || !change.pressed || (change.position - down.position).getDistance() > 12 * density) {
+                            if (event.changes.size != 1 || change == null || change.isConsumed || (change.position - down.position).getDistance() > 12 * density) {
                                 eligible = false; break
                             }
+                            if (!change.pressed) { tapped = true; break }
                         }
                         true
                     }
-                    if (finishedEarly == true || !eligible) return@awaitEachGesture
+                    if (finishedEarly == true || !eligible) { if (eligible && tapped) currentTap?.invoke(); return@awaitEachGesture }
+                    if (!allowed()) { permission.launch(Manifest.permission.RECORD_AUDIO); return@awaitEachGesture }
                     if (!currentEnabled) return@awaitEachGesture
                     vm.start(chatId, currentReply); activated = true
                     while (true) {

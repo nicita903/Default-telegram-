@@ -55,6 +55,9 @@ fun MediaViewer(items: List<MediaItem>, initialId: Long, viewModel: MediaViewMod
                 when (item.media.kind) {
                     MediaKind.Photo -> ZoomPhoto(item, file, item.media.thumbnail?.let { state.files[it.id] }, state.session,
                         onTap = { controls = !controls }, onClose = onClose, onNavigate = ::navigate)
+                    MediaKind.VideoNote -> Box(Modifier.align(Alignment.Center).padding(24.dp)) {
+                        com.vector.messenger.feature.video.VideoNoteMessage(item, viewModel, true, false, null, false, {}, {}, {}, {})
+                    }
                     MediaKind.Video, MediaKind.Animation -> {
                         val path = file?.path
                         if (path != null && file.complete) {

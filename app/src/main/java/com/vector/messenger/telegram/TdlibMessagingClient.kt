@@ -114,11 +114,36 @@ class TdlibMessagingClient(private val manager: TdlibClientManager, private val 
     }
     override suspend fun cancelPhotoSend(chatId: Long, messageId: Long) {
         val message = call(request("getMessage", "chat_id" to chatId, "message_id" to messageId))
-        if (message.optJSONObject("content")?.optString("@type") !in setOf("messagePhoto", "messageDocument") ||
+        if (message.optJSONObject("content")?.optString("@type") !in setOf("messagePhoto", "messageDocument", "messageVideoNote") ||
             message.optJSONObject("sending_state")?.optString("@type") !in setOf("messageSendingStatePending", "messageSendingStateFailed"))
             throw MessagingException(MessagingFailure.Forbidden)
         // Only the temporary sending ID is deleted. Never resolve it to a delivered replacement.
         call(request("deleteMessages", "chat_id" to chatId, "message_ids" to JSONArray().put(messageId), "revoke" to false))
+    }
+    override suspend fun sendVideoNote(chatId: Long, clip: com.vector.core.media.VideoNoteClip, replyTo: Long?): com.vector.core.Message {
+        require(clip.duration in 1..60 && clip.length in 1..640)
+        val chat = call(request("getChat", "chat_id" to chatId))
+        val type = chat.optJSONObject("type")
+        val group = when (type?.optString("@type")) {
+            "chatTypeBasicGroup" -> call(request("getBasicGroup", "basic_group_id" to type.optLong("basic_group_id")))
+            "chatTypeSupergroup" -> call(request("getSupergroup", "supergroup_id" to type.optLong("supergroup_id")))
+            else -> null
+        }
+        val status = group?.optJSONObject("status")
+        val allowed = when (status?.optString("@type")) {
+            "chatMemberStatusCreator" -> true
+            "chatMemberStatusAdministrator" -> group?.optBoolean("is_channel") != true || status.optJSONObject("rights")?.optBoolean("can_post_messages") == true
+            "chatMemberStatusRestricted" -> status.optBoolean("is_member") && status.optJSONObject("permissions")?.optBoolean("can_send_video_notes") == true
+            "chatMemberStatusBanned", "chatMemberStatusLeft" -> false
+            else -> chat.optJSONObject("permissions")?.optBoolean("can_send_video_notes") == true
+        }
+        if (!allowed) throw MessagingException(MessagingFailure.Forbidden)
+        val thumbnail = clip.thumbnail?.let { request("inputThumbnail", "thumbnail" to request("inputFileLocal", "path" to it), "width" to 160, "height" to 160) }
+        return mapTelegramMessage(call(request("sendMessage", "chat_id" to chatId, "topic_id" to null,
+            "reply_to" to replyTo?.let { request("inputMessageReplyToMessage", "message_id" to it, "quote" to null, "checklist_task_id" to 0, "poll_option_id" to "") },
+            "options" to null, "reply_markup" to null, "input_message_content" to request("inputMessageVideoNote",
+                "video_note" to request("inputVideoNote", "video_note" to request("inputFileLocal", "path" to clip.path), "thumbnail" to thumbnail, "duration" to clip.duration, "length" to clip.length),
+                "self_destruct_type" to null))))
     }
     override suspend fun sendVoice(chatId: Long, clip: com.vector.core.audio.VoiceClip, replyTo: Long?) = mapTelegramMessage(call(
         voiceMessageRequest(chatId, clip, replyTo)))

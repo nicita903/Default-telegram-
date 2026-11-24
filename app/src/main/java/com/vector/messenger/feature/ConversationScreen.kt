@@ -99,10 +99,25 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
     val voiceState by remember(voiceViewModel) {
         voiceViewModel?.state ?: kotlinx.coroutines.flow.MutableStateFlow(com.vector.core.audio.RecordingState())
     }.collectAsStateWithLifecycle()
-    val recording = voiceState.chatId == chatId && voiceState.phase != com.vector.core.audio.RecordingPhase.Idle &&
+    val videoNotes = com.vector.messenger.feature.video.LocalVideoNotes.current
+    val videoState by (videoNotes?.state ?: remember { kotlinx.coroutines.flow.MutableStateFlow(com.vector.messenger.feature.video.VideoNoteState()) }).collectAsStateWithLifecycle()
+    val videoBusy = videoState.chat == chatId && videoState.phase != com.vector.messenger.feature.video.VideoNotePhase.Idle
+    val recording = videoBusy || voiceState.chatId == chatId && voiceState.phase != com.vector.core.audio.RecordingPhase.Idle &&
         voiceState.phase != com.vector.core.audio.RecordingPhase.Failed && voiceState.phase != com.vector.core.audio.RecordingPhase.Uncertain
     LaunchedEffect(voiceViewModel, chatId, status.session) {
         voiceViewModel?.accepted?.collect { accepted -> if (accepted.chatId == chatId) { viewModel.requestLatest(chatId); if (replyTo == accepted.replyTo) replyTo = null } }
+    }
+    LaunchedEffect(videoNotes, chatId, status.session) { videoNotes?.accepted?.collect { (chat, reply) -> if (chat == chatId) { viewModel.requestLatest(chatId); if (replyTo == reply) replyTo = null } } }
+    val videoMessages by rememberUpdatedState(newestFirst)
+    var automaticVideo by remember(chatId, status.session) { mutableStateOf<Long?>(null) }
+    LaunchedEffect(listState, chatId, status.session, visibleTop) {
+        snapshotFlow {
+            val layout = listState.layoutInfo
+            if (listState.isScrollInProgress) null else layout.visibleItemsInfo.firstOrNull { item ->
+                val visible = (minOf(layout.viewportEndOffset, item.offset + item.size) - maxOf(visibleTop.toInt(), item.offset)).coerceAtLeast(0)
+                item.size > 0 && visible.toFloat() / item.size >= .65f && videoMessages.getOrNull(item.index)?.media?.kind == MediaKind.VideoNote
+            }?.key as? Long
+        }.collect { automaticVideo = it }
     }
     var mediaSelection by rememberSaveable(chatId, status.session) { mutableStateOf<Long?>(null) }
     val toolRequest by viewModel.chatTool.collectAsStateWithLifecycle()
@@ -193,7 +208,7 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
                     val statusVisible by remember(listState, message.id, visibleTop) {
                         derivedStateOf { listState.layoutInfo.visibleItemsInfo.any { it.key == message.id && it.offset + it.size > visibleTop } }
                     }
-                    MessageBubble(message, byId[message.replyTo], position, statusVisible = statusVisible,
+                    MessageBubble(message, byId[message.replyTo], position, statusVisible = statusVisible, videoAutoplay = automaticVideo == message.id,
                         statusTransitions = viewModel.messageStatusTransitions, statusSession = status.session,
                         onActions = { actionsFor = message.id }, onReply = { if (!busy && !recording) { editId = null; replyTo = message.id } },
                         onReaction = { viewModel.react(chatId, message.id, it) },
@@ -357,9 +372,10 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
 private fun MessageBubble(message: Message, reply: Message?, position: MessageGroupPosition,
     onActions: () -> Unit, onReply: () -> Unit, onReaction: (String) -> Unit, onCancelUpload: () -> Unit, onRetryUpload: () -> Unit, onOpenAttachment: (Attachment) -> Unit,
     mediaViewModel: MediaViewModel?, mediaItem: MediaItem?, onMedia: () -> Unit, statusVisible: Boolean,
-    statusTransitions: MessageStatusTransitions, statusSession: Long,
+    statusTransitions: MessageStatusTransitions, statusSession: Long, videoAutoplay: Boolean = false,
 ) {
     val outgoing = message.outgoing
+    val videoCircle = message.media?.kind == MediaKind.VideoNote
     val colors = DefaultDesign.colors
     var drag by remember { mutableFloatStateOf(0f) }
     val translation = animateFloatAsState(drag, VectorMotionSpec.replyFollow(LocalAppearance.current), label = "Swipe to reply")
@@ -374,13 +390,13 @@ private fun MessageBubble(message: Message, reply: Message?, position: MessageGr
     val currentReaction by rememberUpdatedState(onReaction)
     val canDoubleReact = !message.restricted && !message.isService && message.media == null && message.attachment == null &&
         message.delivery !in listOf(Delivery.Sending, Delivery.Failed)
-    Column(Modifier.widthIn(max = 310.dp).graphicsLayer { translationX = translation.value; scaleX = pulse.value; scaleY = pulse.value }.clip(shape)
+    Column(Modifier.widthIn(max = 310.dp).graphicsLayer { translationX = translation.value; scaleX = pulse.value; scaleY = pulse.value }.clip(if (videoCircle) androidx.compose.ui.graphics.RectangleShape else shape)
         .pointerInput(message.id, replyDistance) {
             detectHorizontalDragGestures(onDragEnd = { if (drag >= replyDistance) currentReply(); drag = 0f }, onDragCancel = { drag = 0f }) { change, amount ->
                 change.consume(); drag = max(0f, drag + amount).coerceAtMost(replyDistance * 1.2f)
             }
         }
-            .background(if (outgoing) colors.outgoing else colors.panel.copy(alpha = .78f), shape)
+            .background(if (videoCircle) androidx.compose.ui.graphics.Color.Transparent else if (outgoing) colors.outgoing else colors.panel.copy(alpha = .78f), shape)
                 .combinedClickable(indication = null, interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }, onClick = {}, onLongClick = onActions,
             onDoubleClick = if (canDoubleReact) ({
                 if (feedbackJob?.isActive != true) {
@@ -394,7 +410,7 @@ private fun MessageBubble(message: Message, reply: Message?, position: MessageGr
                     }
                 }
             }) else null)
-        .padding(horizontal = 12.dp, vertical = 8.dp)) {
+        .padding(horizontal = if (videoCircle) 0.dp else 12.dp, vertical = if (videoCircle) 0.dp else 8.dp)) {
         val reactions = message.reactions.ifEmpty { message.reaction?.let { listOf(MessageReaction(it, 1, true)) }.orEmpty() }
         CompactMessageContent(outgoing, reactions, onReaction) {
             if (message.replyTo != null) {
@@ -407,7 +423,9 @@ private fun MessageBubble(message: Message, reply: Message?, position: MessageGr
                 }
             }
             if (mediaItem != null && mediaViewModel != null) {
-                if (mediaItem.media.kind in listOf(MediaKind.Voice, MediaKind.Audio)) com.vector.messenger.feature.audio.VoiceAttachment(mediaItem, mediaViewModel)
+                if (mediaItem.media.kind == MediaKind.VideoNote) com.vector.messenger.feature.video.VideoNoteMessage(mediaItem, mediaViewModel, statusVisible, videoAutoplay,
+                    message.delivery, message.canRetry, onRetryUpload, onCancelUpload, { onReaction("❤") }, onActions)
+                else if (mediaItem.media.kind in listOf(MediaKind.Voice, MediaKind.Audio)) com.vector.messenger.feature.audio.VoiceAttachment(mediaItem, mediaViewModel)
                 else MediaAttachmentView(mediaItem, mediaViewModel, onMedia, message.delivery,
                     onCancelUpload, onRetryUpload, message.canRetry, message.retryAt)
             }

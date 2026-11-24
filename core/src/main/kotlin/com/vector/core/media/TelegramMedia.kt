@@ -2,7 +2,7 @@ package com.vector.core.media
 
 import kotlinx.coroutines.flow.Flow
 
-enum class MediaKind { Photo, Video, Animation, Document, Voice, Audio }
+enum class MediaKind { Photo, Video, Animation, Document, Voice, Audio, VideoNote }
 enum class DownloadPhase { Available, Queued, Downloading, Complete, Paused, Failed }
 
 data class MediaFile(
@@ -60,3 +60,8 @@ fun viewerRelease(dx: Float, dy: Float, zoom: Float, multiTouch: Boolean, cancel
         return if (dx < 0) ViewerAction.Next else ViewerAction.Previous
     return ViewerAction.None
 }
+
+data class VideoNoteClip(val path: String, val duration: Int, val length: Int, val thumbnail: String? = null) {
+    override fun toString() = "VideoNoteClip([redacted])"
+}
+data class VideoNoteSubmission(val result: com.vector.core.SendResult, val messageId: Long = 0, val fileId: Int = 0)

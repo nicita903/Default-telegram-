@@ -9,6 +9,8 @@ interface ChatRepository {
     suspend fun editText(chatId: Long, messageId: Long, text: String): SendResult = SendResult.Unsupported
     suspend fun sendPhotos(chatId: Long, photos: List<com.vector.core.media.UploadPhoto>, caption: String, album: Boolean, replyTo: Long?): com.vector.core.media.PhotoSendResult = com.vector.core.media.PhotoSendResult(result = SendResult.Unsupported)
     fun cancelPhotoSend(chatId: Long, messageId: Long) {}
+    suspend fun sendVideoNote(chatId: Long, clip: com.vector.core.media.VideoNoteClip, replyTo: Long?): com.vector.core.media.VideoNoteSubmission = com.vector.core.media.VideoNoteSubmission(SendResult.Unsupported)
+    val outgoingUpdates: kotlinx.coroutines.flow.Flow<Message> get() = kotlinx.coroutines.flow.emptyFlow()
     suspend fun sendVoice(chatId: Long, clip: com.vector.core.audio.VoiceClip, replyTo: Long? = null): SendResult = SendResult.Unsupported
     fun toggleReaction(chatId: Long, messageId: Long, reaction: String)
     fun markRead(chatId: Long)

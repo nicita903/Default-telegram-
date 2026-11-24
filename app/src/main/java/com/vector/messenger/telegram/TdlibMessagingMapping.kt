@@ -53,7 +53,7 @@ internal fun contentText(content: JSONObject): String {
         "messageLocation", "messageVenue" -> "Location"
         else -> "Unsupported message"
     }
-    if (type == "messagePhoto" || type == "messageDocument") return caption
+    if (type == "messagePhoto" || type == "messageDocument" || type == "messageVideoNote") return caption
     return if (caption.isBlank()) label else "$label · $caption"
 }
 internal fun mapMessageReactions(info: JSONObject?): List<MessageReaction> {
@@ -103,7 +103,7 @@ private fun messagePreview(message: JSONObject): String {
     if (restrictedMessage(message)) return "Content unavailable"
     val content = message.optJSONObject("content") ?: JSONObject()
     return contentText(content).ifEmpty {
-        if (content.optString("@type") == "messageDocument") content.optJSONObject("document")?.safeText("file_name")?.ifBlank { "File" } ?: "File" else "Photo"
+        if (content.optString("@type") == "messageVideoNote") "Video message" else if (content.optString("@type") == "messageDocument") content.optJSONObject("document")?.safeText("file_name")?.ifBlank { "File" } ?: "File" else "Photo"
     }
 }
 internal fun mapPosition(json: JSONObject): ChatPosition? {

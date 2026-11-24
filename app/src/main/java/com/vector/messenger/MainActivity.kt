@@ -41,6 +41,7 @@ class MainActivity : ComponentActivity() {
     private val media: com.vector.messenger.feature.media.MediaViewModel by viewModels()
     private val audio: com.vector.messenger.feature.audio.AudioViewModel by viewModels()
     private val voice: com.vector.messenger.feature.audio.VoiceViewModel by viewModels()
+    private val videoNotes: com.vector.messenger.feature.video.VideoNoteViewModel by viewModels()
     private val music: com.vector.messenger.feature.music.MusicViewModel by viewModels()
     override fun onNewIntent(intent: android.content.Intent) {
         super.onNewIntent(intent); setIntent(intent); notifications.accept(intent)
@@ -53,9 +54,11 @@ class MainActivity : ComponentActivity() {
         val account = authentication // Starts/restores the process-owned Telegram session asynchronously.
         setContent {
             val appearance by preferences.appearance.collectAsStateWithLifecycle()
+            val videoRecording by videoNotes.state.collectAsStateWithLifecycle()
             val recording by voice.state.collectAsStateWithLifecycle()
             SideEffect { sounds.recording(recording.phase in setOf(com.vector.core.audio.RecordingPhase.Starting, com.vector.core.audio.RecordingPhase.Recording,
-                com.vector.core.audio.RecordingPhase.Locked, com.vector.core.audio.RecordingPhase.Finishing)) }
+                com.vector.core.audio.RecordingPhase.Locked, com.vector.core.audio.RecordingPhase.Finishing) || videoRecording.phase in setOf(
+                    com.vector.messenger.feature.video.VideoNotePhase.Starting, com.vector.messenger.feature.video.VideoNotePhase.Recording, com.vector.messenger.feature.video.VideoNotePhase.Paused)) }
             SideEffect {
                 // Aurora owns a single dark canvas; the system bars never switch to light icons.
                 WindowCompat.getInsetsController(window, window.decorView).apply {
@@ -68,6 +71,7 @@ class MainActivity : ComponentActivity() {
                 com.vector.messenger.feature.media.LocalMediaViewModel provides media,
                 com.vector.messenger.feature.audio.LocalAudioViewModel provides audio,
                 com.vector.messenger.feature.audio.LocalVoiceViewModel provides voice,
+                com.vector.messenger.feature.video.LocalVideoNotes provides videoNotes,
                 com.vector.messenger.feature.avatar.LocalAvatarViewModel provides avatars,
                 com.vector.messenger.feature.profile.LocalProfileModuleViewModel provides profileModule,
                 com.vector.messenger.feature.avatar.LocalAccountAction provides { accountOpen = true },

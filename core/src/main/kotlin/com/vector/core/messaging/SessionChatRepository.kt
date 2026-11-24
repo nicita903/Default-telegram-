@@ -22,6 +22,8 @@ class SessionChatRepository(
     override val history = historyState.asStateFlow()
     private val arrivalEvents = MutableSharedFlow<MessageArrival>(extraBufferCapacity = 128)
     override val arrivals = arrivalEvents.asSharedFlow()
+    private val outgoingEvents = MutableSharedFlow<Message>(extraBufferCapacity = 64)
+    override val outgoingUpdates = outgoingEvents.asSharedFlow()
     private val feedbackEvents = MutableSharedFlow<ChatFeedback>(extraBufferCapacity = 64)
     override val feedback = feedbackEvents.asSharedFlow()
     private var confirmationSequence = 0L
@@ -179,7 +181,9 @@ class SessionChatRepository(
                 change(update.id) { it.copy(lastReadOutbox = update.lastId) }
                 if (active == update.id) { window.replaceAll { _, message -> normalize(message) }; publishMessages() }
             }
-            is ChatUpdate.Upsert -> if (active == update.message.chatId) {
+            is ChatUpdate.Upsert -> {
+                if (update.message.outgoing) outgoingEvents.tryEmit(update.message)
+                if (active == update.message.chatId) {
                 val fresh = update.isNew && update.message.id !in seenArrivals && update.message.id !in window
                 val follow = viewportNearLatest && !viewportScrolling && atLatest
                 update.oldId?.takeIf { it != update.message.id }?.let { old ->
@@ -196,6 +200,7 @@ class SessionChatRepository(
                     arrivalEvents.tryEmit(MessageArrival(epoch, update.message.chatId, update.message.id, update.message.outgoing,
                         follow, update.message.outgoing && update.message.delivery == Delivery.Sending))
                 }
+            }
             }
             is ChatUpdate.Content -> {
                 if (records[update.chatId]?.let { it.lastMessageId == update.messageId && !it.lastRestricted } == true)
@@ -349,7 +354,7 @@ class SessionChatRepository(
     }
     override fun cancelPhotoSend(chatId: Long, messageId: Long) {
         val message = window[messageId]?.takeIf { it.chatId == chatId } ?: return
-        if (message.media?.kind !in listOf(com.vector.core.media.MediaKind.Photo, com.vector.core.media.MediaKind.Document) || message.delivery !in listOf(Delivery.Sending, Delivery.Failed)) return
+        if (message.media?.kind !in listOf(com.vector.core.media.MediaKind.Photo, com.vector.core.media.MediaKind.Document, com.vector.core.media.MediaKind.VideoNote) || message.delivery !in listOf(Delivery.Sending, Delivery.Failed)) return
         val key = chatId to messageId
         if (!photoCancellations.add(key)) return
         val session = epoch
@@ -387,6 +392,23 @@ class SessionChatRepository(
             else { put(message); publishMessages(); confirmation(chatId); SendResult.Sent }
         } catch (cancelled: CancellationException) { throw cancelled }
         catch (failure: Exception) { if ((failure as? MessagingException)?.failure == MessagingFailure.Forbidden) SendResult.Forbidden else SendResult.Failed }
+        finally { if (session == epoch) sends.remove(chatId) }
+    }
+    override suspend fun sendVideoNote(chatId: Long, clip: com.vector.core.media.VideoNoteClip, replyTo: Long?): com.vector.core.media.VideoNoteSubmission {
+        fun result(value: SendResult) = com.vector.core.media.VideoNoteSubmission(value)
+        if (!live || records[chatId] == null) return result(SendResult.MissingChat)
+        if (clip.duration !in 1..60 || clip.length !in 1..640 || clip.path.isBlank()) return result(SendResult.Empty)
+        if (!sends.add(chatId)) return result(SendResult.Failed)
+        val session = epoch
+        return try {
+            val message = client.sendVideoNote(chatId, clip, replyTo)
+            currentCoroutineContext().ensureActive()
+            if (!live || session != epoch) result(SendResult.MissingChat)
+            else { put(message); publishMessages(); accepted(message); outgoingEvents.tryEmit(message)
+                com.vector.core.media.VideoNoteSubmission(SendResult.Sent, message.id, message.media?.file?.id ?: 0) }
+        } catch (cancelled: CancellationException) { throw cancelled }
+        catch (failure: Exception) { result(when ((failure as? MessagingException)?.failure) {
+            MessagingFailure.Network -> SendResult.Uncertain; MessagingFailure.Forbidden -> SendResult.Forbidden; else -> SendResult.Failed }) }
         finally { if (session == epoch) sends.remove(chatId) }
     }
     override suspend fun sendVoice(chatId: Long, clip: com.vector.core.audio.VoiceClip, replyTo: Long?): SendResult {

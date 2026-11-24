@@ -38,6 +38,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.vector.messenger.design.*
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vector.messenger.feature.audio.VoiceMicrophone
 import com.vector.messenger.feature.audio.VoiceRecordingPanel
 import com.vector.messenger.navigation.gesture.excludeModuleGestures
@@ -52,6 +53,8 @@ fun AdaptiveMessageInput(
     onAttach: () -> Unit, onSubmit: () -> Unit,
     attachmentsEnabled: Boolean = enabled,
 ) {
+    val video = com.vector.messenger.feature.video.LocalVideoNotes.current
+    val videoMode by (video?.videoMode ?: remember { kotlinx.coroutines.flow.MutableStateFlow(false) }).collectAsStateWithLifecycle()
     val settings = LocalAppearance.current
     val colors = DefaultDesign.colors
     val showSend = editing || value.text.isNotEmpty() || attachmentName != null
@@ -70,6 +73,7 @@ fun AdaptiveMessageInput(
     Column(Modifier.fillMaxWidth().excludeModuleGestures().padding(horizontal = 8.dp, vertical = 6.dp)) {
         // Never put recording UI in an animated/disposable branch of the text editor.
         VoiceRecordingPanel(chatId)
+        com.vector.messenger.feature.video.VideoNoteRecorderPanel(chatId)
         AnimatedContent(contextTitle?.let { it to contextText }, transitionSpec = {
             (VectorMotionSpec.lockEnter(settings) togetherWith VectorMotionSpec.lockExit(settings))
                 .using(SizeTransform { _, _ -> VectorMotionSpec.transition(settings) })
@@ -114,7 +118,8 @@ fun AdaptiveMessageInput(
                 // Keep the microphone mounted: text changes must not dispose its recording job.
                 Box(Modifier.size(if (showMic) 48.dp else 0.dp).graphicsLayer { alpha = 1f - actionAlpha.value }
                     .then(if (!showMic) Modifier.clearAndSetSemantics {} else Modifier)) {
-                    if (live) VoiceMicrophone(chatId, replyTo, enabled && showMic && !busy)
+                    if (live && videoMode) com.vector.messenger.feature.video.VideoNoteButton(chatId, replyTo, enabled && showMic && !busy)
+                    else if (live) VoiceMicrophone(chatId, replyTo, enabled && showMic && !busy, onTap = { if (!recording) video?.mode(true) })
                     else DefaultIconControl(VectorIcons.Microphone, "Voice messages require Telegram", {}, enabled = false, quiet = true)
                 }
                 if (!showMic) Box(Modifier.size(48.dp).graphicsLayer { alpha = actionAlpha.value }) {

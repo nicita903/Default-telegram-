@@ -15,6 +15,12 @@ internal fun mapMediaFile(json: JSONObject): MediaFile {
 
 internal fun mapTelegramMedia(content: JSONObject): TelegramMedia? {
     if (restricted(content) || content.optBoolean("is_secret") || content.optBoolean("has_spoiler")) return null
+    if (content.optString("@type") == "messageVideoNote") {
+        val note = content.optJSONObject("video_note") ?: return null
+        val file = note.optJSONObject("video") ?: return null
+        return TelegramMedia(MediaKind.VideoNote, mapMediaFile(file), "Video note.mp4", "video/mp4",
+            note.optJSONObject("thumbnail")?.optJSONObject("file")?.let(::mapMediaFile), note.optInt("length"), note.optInt("length"), note.optInt("duration"))
+    }
     if (content.optString("@type") == "messageVoiceNote") {
         val voice = content.optJSONObject("voice_note") ?: return null
         val file = voice.optJSONObject("voice") ?: return null

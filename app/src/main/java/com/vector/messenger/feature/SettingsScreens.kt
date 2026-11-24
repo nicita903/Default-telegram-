@@ -73,6 +73,11 @@ fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit) {
         SettingStepper("Animation intensity", settings.intensity, listOf(0, 25, 50, 75, 100), "%") { value -> viewModel.appearance { it.copy(intensity = value) } }
         PreferenceToggle("Reduced motion", settings.reducedMotion) { value -> viewModel.appearance { it.copy(reducedMotion = value) } }
         DefaultRule()
+        val videoNotes = com.vector.messenger.feature.video.LocalVideoNotes.current
+        if (videoNotes != null) {
+            val autoVideo by videoNotes.autoplay.collectAsStateWithLifecycle()
+            PreferenceToggle("Autoplay cached video circles", autoVideo, videoNotes::autoplay)
+        }
         Text("Interface", style = MaterialTheme.typography.titleMedium)
         SettingStepper("Density", if (settings.compact) 0 else 1, listOf(0, 1), "", listOf("Compact", "Comfortable")) { value -> viewModel.appearance { it.copy(compact = value == 0) } }
         SettingStepper("Accent color", settings.accent, listOf(0, 1, 2), "", listOf("Aurora blue", "Violet", "Teal")) { value -> viewModel.appearance { it.copy(accent = value) } }

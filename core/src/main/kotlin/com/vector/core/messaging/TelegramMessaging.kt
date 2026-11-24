@@ -41,6 +41,7 @@ interface TelegramMessagingClient {
     suspend fun photoPermission(chatId: Long, document: Boolean = false): Boolean = true
     suspend fun cancelPhotoSend(chatId: Long, messageId: Long) { throw MessagingException(MessagingFailure.Unavailable) }
     suspend fun toggleReaction(chatId: Long, messageId: Long, emoji: String): List<MessageReaction> = throw MessagingException(MessagingFailure.Unavailable)
+    suspend fun sendVideoNote(chatId: Long, clip: com.vector.core.media.VideoNoteClip, replyTo: Long?): Message = throw MessagingException(MessagingFailure.Unavailable)
     suspend fun sendVoice(chatId: Long, clip: com.vector.core.audio.VoiceClip, replyTo: Long?): Message = throw MessagingException(MessagingFailure.Unavailable)
     suspend fun resend(chatId: Long, messageId: Long): List<Message>
     suspend fun openChat(chatId: Long)
