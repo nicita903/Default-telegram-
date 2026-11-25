@@ -35,14 +35,14 @@ data class CallSecurityUiState(val callId: Int, val verificationEmojis: List<Str
 }
 enum class VoiceCallPhase { Idle, Requesting, Incoming, Ringing, Connecting, Active, Reconnecting, Ending, Ended, Failed }
 data class VoiceCallState(val id: Int = 0, val user: Long = 0, val name: String = "", val phase: VoiceCallPhase = VoiceCallPhase.Idle,
-    val muted: Boolean = false, val speaker: Boolean = false, val connectedAt: Long = 0, val error: String? = null, val outgoing: Boolean = false, val video: Boolean = false, val security: CallSecurityUiState? = null, val audioOutput: Int = AudioDeviceInfo.TYPE_UNKNOWN) {
+    val muted: Boolean = false, val speaker: Boolean = false, val connectedAt: Long = 0, val error: String? = null, val outgoing: Boolean = false, val video: Boolean = false, val security: CallSecurityUiState? = null, val audioOutput: Int = AudioDeviceInfo.TYPE_UNKNOWN, val audioReady: Boolean = false) {
     override fun toString() = "VoiceCallState([redacted])"
 }
 
 @Singleton
 class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val context: Context, private val manager: TdlibClientManager,
     private val profile: ProfileRepository, private val transport: TdlibAvatarClient, private val player: SharedMediaPlayer,
-    private val scope: CoroutineScope, val privacy: CallPrivacy, internal val platform: TelegramCallPlatform) {
+    private val scope: CoroutineScope, val privacy: CallPrivacy, internal val platform: TelegramCallPlatform, val settings: CallPreferences, internal val sounds: CallSoundController) {
     private val mutable = MutableStateFlow(VoiceCallState())
     val state = mutable.asStateFlow()
     private var bridge: TgCallsBridge? = null
@@ -309,11 +309,27 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
                 if (!outgoing && !answered && !declinedLocally && !missedShown && remote.optJSONObject("reason")?.optString("@type") == "callDiscardReasonMissed") {
                     missedShown = true; platform.missed(key, snapshot)
                 }
-                ending = true; attempt++; release()
-                mutable.value = if (!outgoing && !answered) VoiceCallState() else snapshot.copy(phase = VoiceCallPhase.Ended, security = null)
+                val reason = remote.optJSONObject("reason")?.optString("@type")
+                val tone = when {
+                    reason == "callDiscardReasonDeclined" && outgoing && snapshot.connectedAt == 0L -> CallToneEnd.Busy
+                    reason == "callDiscardReasonDisconnected" -> CallToneEnd.Failed
+                    else -> CallToneEnd.Ended
+                }
+                ending = true; attempt++; release(tone)
+                mutable.value = if (!outgoing && !answered) VoiceCallState() else snapshot.copy(phase = VoiceCallPhase.Ended,
+                    security = null, audioReady = false, audioOutput = AudioDeviceInfo.TYPE_UNKNOWN, speaker = false,
+                    error = when {
+                        reason == "callDiscardReasonDeclined" && outgoing -> "Contact is busy or declined the call."
+                        reason == "callDiscardReasonDisconnected" -> "The call was disconnected."
+                        else -> snapshot.error
+                    })
             }
-            "callStateError" -> { ending = true; attempt++; release(); mutable.update { it.copy(phase = VoiceCallPhase.Failed, error = "Telegram ended the call with an error.") } }
-            "callStateHangingUp" -> { ending = true; attempt++; release(); mutable.update { it.copy(phase = VoiceCallPhase.Ending) } }
+            "callStateError" -> {
+                val detail = remote.optJSONObject("error")?.optString("message")?.takeIf { it.isNotBlank() }?.take(240)
+                ending = true; attempt++; release(CallToneEnd.Failed)
+                mutable.update { it.copy(phase = VoiceCallPhase.Failed, error = detail ?: "Telegram ended the call with an error.") }
+            }
+            "callStateHangingUp" -> { ending = true; attempt++; release(waitingForReason = true); mutable.update { it.copy(phase = VoiceCallPhase.Ending) } }
         }
     }
     private suspend fun startMedia(ready: JSONObject, outgoing: Boolean) {
@@ -397,7 +413,7 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
     }
     fun speaker() {
         if (!audioOwned || ending) return
-        platform.route(if (state.value.speaker) androidx.core.telecom.CallEndpointCompat.TYPE_EARPIECE else androidx.core.telecom.CallEndpointCompat.TYPE_SPEAKER)
+        if (state.value.speaker) platform.privateRoute() else platform.route(androidx.core.telecom.CallEndpointCompat.TYPE_SPEAKER)
     }
     fun bluetooth() {
         if (!audioOwned || ending) return
@@ -409,7 +425,7 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
         ending = true; attempt++
         callDiagnostic(context, CallEvent.Terminating)
         val record = state.value; val account = owner; val token = epoch
-        release()
+        release(if (error == null) CallToneEnd.Ended else CallToneEnd.Failed)
         mutable.update { it.copy(phase = VoiceCallPhase.Ending) }
         scope.launch {
             try { if (record.id != 0 && account != 0L) call(request("discardCall", "call_id" to record.id, "is_disconnected" to (error != null), "invite_link" to "",
@@ -429,6 +445,7 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
     private fun acquireAudio() {
         checkPermission(); check(!audioOwned)
         player.stop(); audioOwned = true
+        mutable.update { it.copy(audioReady = true) }
         // Core-Telecom owns audio focus, communication mode and endpoint routing.
         // The platform has already promoted the phoneCall service before ensure() completes.
         networkJob = scope.launch {
@@ -440,13 +457,14 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
     private fun cleanup(action: () -> Unit) {
         try { action() } catch (_: Exception) { callDiagnostic(context, CallEvent.CleanupFailure) }
     }
-    private fun release() {
+    private fun release(tone: CallToneEnd? = null, waitingForReason: Boolean = false) {
+        if (waitingForReason) sounds.awaitTermination() else if (tone != null) sounds.finish(tone) else sounds.cancel()
         audioOwned = false; systemMuted = false; userMuted = false
         cleanup { platform.close() }
         mediaJob?.cancel(); mediaJob = null
         signalJob?.cancel(); signalJob = null; signals?.cancel(); signals = null
         networkJob?.cancel(); networkJob = null
-        mutable.update { it.copy(security = null, muted = false, speaker = false, audioOutput = AudioDeviceInfo.TYPE_UNKNOWN) }
+        mutable.update { it.copy(security = null, muted = false, speaker = false, audioOutput = AudioDeviceInfo.TYPE_UNKNOWN, audioReady = false) }
         val old = handle; handle = 0
         if (old != 0L) {
             releasing.add(old)
@@ -456,5 +474,5 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
         cleanup { context.stopService(Intent(context, VoiceCallService::class.java)) }
     }
     fun permissionDenied() { if (state.value.phase !in listOf(VoiceCallPhase.Idle, VoiceCallPhase.Ended, VoiceCallPhase.Failed)) return; fail("Microphone permission is required to make or answer a voice call.") }
-    private fun fail(reason: String) { ending = true; attempt++; release(); mutable.update { it.copy(phase = VoiceCallPhase.Failed, error = reason) } }
+    private fun fail(reason: String) { ending = true; attempt++; release(CallToneEnd.Failed); mutable.update { it.copy(phase = VoiceCallPhase.Failed, error = reason) } }
 }

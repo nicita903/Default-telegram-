@@ -66,7 +66,7 @@ private fun settingGroup(entry: SettingEntry) = when (entry.section) {
     "appearance" -> when (entry.id) { "interface" -> "Interface"; "accent" -> "Accent color"; "typography" -> "Typography"; "about" -> "Application"; else -> "Display" }
     "motion" -> when (entry.id) { "speed", "intensity", "reduced" -> "Motion"; "blur" -> "Glass effects"; "haptic", "interface_sound" -> "Feedback"; else -> "Gestures" }
     "messaging" -> if (entry.id == "video_autoplay") "Media" else "In-app sounds"
-    "calling" -> if (entry.id == "verification") "Security" else "Incoming calls"
+    "calling" -> when (entry.id) { "verification" -> "Security"; "call_effects" -> "Sounds"; "call_proximity" -> "Proximity"; else -> "Incoming calls" }
     "notifications" -> "Android notification channels"
     "music" -> "Playback"
     "storage" -> "Management"
@@ -93,6 +93,10 @@ fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit, onDow
     val notifications by viewModel.notifications.collectAsStateWithLifecycle()
     val ghost by viewModel.ghostState.collectAsStateWithLifecycle()
     val context = LocalContext.current
+    val calls = LocalVoiceCalls.current
+    val callSettingsFlow = remember(calls) { calls?.settings?.state ?: MutableStateFlow(CallSettings()) }
+    val callSettings by callSettingsFlow.collectAsStateWithLifecycle()
+    val proximitySupported = remember(context) { CallProximityController.supported(context) }
     val music = LocalMusicViewModel.current
     val musicFlow = remember(music) { music?.repository?.settings?.map { Triple(it.queue.shuffle, it.queue.repeat, it.queue.speed) }?.distinctUntilChanged()
         ?: flowOf(Triple(false, MusicRepeat.Off, 1f)) }
@@ -117,7 +121,7 @@ fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit, onDow
     }
     fun channel(id: String) = openAndroid(Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
         .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName).putExtra(Settings.EXTRA_CHANNEL_ID, id))
-    val entries = remember(appearance, sounds, notifications, ghost.authenticated, musicOptions, autoplay, permitted, ringtone, fullScreen, music, video) {
+    val entries = remember(appearance, sounds, notifications, callSettings, proximitySupported, calls, ghost.authenticated, musicOptions, autoplay, permitted, ringtone, fullScreen, music, video) {
         buildList {
             fun nav(id: String, title: String, section: String, icon: ImageVector, value: String = "", home: String? = null, keywords: String = "") {
                 add(SettingEntry(id, title, section, icon, keywords, value, destination = section, home = home))
@@ -176,6 +180,16 @@ fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit, onDow
             if (ghost.authenticated) add(SettingEntry("call_privacy","Peer-to-peer call privacy","calling",CallIcons.Phone,"telegram relay ip privacy",searchOnly = true))
             add(SettingEntry("verification", "Encryption verification", "calling", VectorIcons.Check, "four emoji security key fingerprint", info =
                 "During an active Telegram voice call, compare the four emojis below the call duration with the other participant, in the same order. Tap the emojis for details. Opening that explanation does not automatically verify the participant's identity."))
+            if (calls != null) {
+                toggle("call_effects", "Call sound effects", "calling", callSettings.effects, "ringback connecting busy disconnect") {
+                    calls.settings.update { p -> p.copy(effects = it) }
+                }
+                if (proximitySupported) toggle("call_proximity", "Proximity during earpiece calls", "calling", callSettings.proximity, "sensor screen ear display") {
+                    calls.settings.update { p -> p.copy(proximity = it) }
+                }
+            }
+            add(SettingEntry("ring_volume", "Ringtone volume", "calling", VectorIcons.Music, "system ring volume silent do not disturb",
+                "Android", action = { openAndroid(Intent(Settings.ACTION_SOUND_SETTINGS)) }))
             add(SettingEntry("ringtone","Incoming call ringtone","calling",VectorIcons.Music,"voice ring sound",ringtone,action = { channel("telegram_incoming_calls_v1") }))
             if (Build.VERSION.SDK_INT >= 34) add(SettingEntry("full_screen","Lock-screen call display","calling",VectorIcons.Views,"full screen incoming notifications", if (fullScreen) "Allowed" else "Restricted",action = {
                 openAndroid(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,Uri.parse("package:${context.packageName}"))) }))

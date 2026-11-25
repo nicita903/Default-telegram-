@@ -50,6 +50,11 @@ class TelegramCallPlatform @Inject constructor(@ApplicationContext private val c
         var job: Job? = null
         var avatarJob: Job? = null
         var endpoints = emptyList<CallEndpointCompat>()
+        var endpoint: CallEndpointCompat? = null
+        var userRoute: String? = null
+        var routeRequest: String? = null
+        var expectedRoute: String? = null
+        var lastPrivate: String? = null
         var person: Person? = null
         var ringing = false
         var foreground = false
@@ -143,8 +148,29 @@ class TelegramCallPlatform @Inject constructor(@ApplicationContext private val c
                     value.operation = "startForegroundService"
                     ContextCompat.startForegroundService(context, Intent(context, VoiceCallService::class.java)
                         .putExtra("attempt", key.attempt))
-                    launch { currentCallEndpoint.collect { endpoint -> if (current(key)) calls.telecomEndpoint(endpoint.type) } }
-                    launch { availableEndpoints.collect { value.endpoints = it } }
+                    launch {
+                        combine(currentCallEndpoint, availableEndpoints) { endpoint, available -> endpoint to available }
+                            .collect { (endpoint, available) ->
+                                if (!current(key)) return@collect
+                                val previousEndpoint = value.endpoint
+                                val topologyChanged = value.endpoints.map { it.identifier }.toSet() != available.map { it.identifier }.toSet()
+                                val expected = value.expectedRoute
+                                value.endpoints = available
+                                value.endpoint = endpoint
+                                val id = endpoint.identifier.toString()
+                                if (endpoint.type != CallEndpointCompat.TYPE_SPEAKER) value.lastPrivate = id
+                                // A route selected from Android's own call controls is authoritative too.
+                                if (expected == id) value.expectedRoute = null
+                                if (previousEndpoint != null && previousEndpoint.identifier != endpoint.identifier &&
+                                    expected != id && !topologyChanged) value.userRoute = id
+                                calls.telecomEndpoint(endpoint.type)
+                                if (value.userRoute != null && available.none { it.identifier.toString() == value.userRoute }) value.userRoute = null
+                                if (value.userRoute == null && value.routeRequest == null) {
+                                    val preferred = privateEndpoint(value) ?: available.firstOrNull { it.type == CallEndpointCompat.TYPE_SPEAKER }
+                                    if (preferred != null && preferred.identifier != endpoint.identifier) requestRoute(value, preferred, manual = false)
+                                }
+                            }
+                    }
                     launch { isMuted.collect { if (current(key)) calls.systemMute(it) } }
                     launch {
                         var established = false
@@ -191,16 +217,36 @@ class TelegramCallPlatform @Inject constructor(@ApplicationContext private val c
             else -> false
         }
     }
+    private fun privateEndpoint(value: Entry): CallEndpointCompat? =
+        listOf(CallEndpointCompat.TYPE_WIRED_HEADSET, CallEndpointCompat.TYPE_BLUETOOTH, CallEndpointCompat.TYPE_EARPIECE)
+            .firstNotNullOfOrNull { type -> value.endpoints.firstOrNull { it.type == type } }
+    internal fun privateRoute() {
+        val value = entry ?: return
+        val endpoint = value.endpoints.firstOrNull { it.identifier.toString() == value.lastPrivate && it.type != CallEndpointCompat.TYPE_SPEAKER }
+            ?: privateEndpoint(value) ?: return
+        requestRoute(value, endpoint, manual = true)
+    }
     internal fun route(type: Int) {
         val value = entry ?: return
         val endpoint = value.endpoints.firstOrNull { it.type == type } ?: return
+        requestRoute(value, endpoint, manual = true)
+    }
+    private fun requestRoute(value: Entry, endpoint: CallEndpointCompat, manual: Boolean) {
+        if (!current(value.key) || value.routeRequest != null) return
+        val id = endpoint.identifier.toString()
+        value.routeRequest = id
+        value.expectedRoute = id
         scope.launch {
-            try { if (current(value.key)) {
-                val result = value.control?.requestEndpointChange(endpoint)
-                if (result is CallControlResult.Error) diagnose("requestEndpointChange", value, code = result.errorCode)
-            } }
-            catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { diagnose("requestEndpointChange", value, error) }
+            try {
+                if (current(value.key)) when (val result = value.control?.requestEndpointChange(endpoint)) {
+                    is CallControlResult.Error -> { value.expectedRoute = null; diagnose("requestEndpointChange", value, code = result.errorCode) }
+                    is CallControlResult.Success -> if (manual) value.userRoute = id
+                    else -> Unit
+                }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { value.expectedRoute = null; diagnose("requestEndpointChange", value, error) }
+            finally { value.routeRequest = null }
+            // The endpoint flow alone updates the UI; a successful request isn't a route report.
         }
     }
     internal fun close(cause: Int = DisconnectCause.LOCAL) {

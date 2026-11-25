@@ -138,3 +138,11 @@ Changed files: `app/build.gradle.kts` (one required AndroidX dependency), `Andro
 Primary Android references: [Core-Telecom integration](https://developer.android.com/develop/connectivity/telecom/voip-app/telecom), [native CallStyle notifications](https://developer.android.com/develop/ui/views/notifications/call-style). Source APIs were checked in Google's official 1.0.0 sources archive, alongside the installed pinned TDLib schema.
 
 Build result for this background-call update: final `:app:assembleDebug` succeeded in 1m 12s after the stale-action and cleanup safety corrections. The required Core-Telecom dependency resolved successfully; no native build or extra test suite ran. The APK's calling library hash still matches the existing reviewed native manifest.
+
+
+## Calling experience additions
+
+Call-scoped tones, optional earpiece proximity screen-off, Telecom endpoint selection and Calls
+preferences are described in [CALLING_EXPERIENCE.md](CALLING_EXPERIENCE.md), including original
+asset provenance, registration preflight and focused device checks. No physical device was connected
+for this update; sounds, sensors and routing are implemented but not physically validated.
