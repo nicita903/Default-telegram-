@@ -14,6 +14,7 @@ import javax.inject.Inject
 @AndroidEntryPoint
 class VoiceCallService : Service() {
     @Inject lateinit var calls: TelegramVoiceCalls
+    private var attempt = -1L
     override fun onCreate() {
         super.onCreate()
         getSystemService(NotificationManager::class.java).createNotificationChannel(NotificationChannel("default_voice_calls", "Voice calls", NotificationManager.IMPORTANCE_LOW))
@@ -26,9 +27,11 @@ class VoiceCallService : Service() {
         ServiceCompat.startForeground(this, 8400, notice, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
     }
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.hasExtra("attempt") == true) attempt = intent.getLongExtra("attempt", -1L)
         if (intent?.action == "end") calls.end()
         return START_NOT_STICKY
     }
     override fun onTaskRemoved(rootIntent: Intent?) { calls.end(); super.onTaskRemoved(rootIntent) }
+    override fun onDestroy() { calls.serviceStopped(attempt); super.onDestroy() }
     override fun onBind(intent: Intent?): IBinder? = null
 }

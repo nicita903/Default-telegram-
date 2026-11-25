@@ -68,7 +68,7 @@
     ],
     "protocolLayer": 92
   },
-  "sha256": "5ca2299c6c674a97241e726f949156ac1ab866fda69ce68a6cd340495aeb63e5",
+  "sha256": "f17e5acb382a7e5c929076307899908f77c5ab57f9a696a361804ceb750476d6",
   "file": "libdefault_calls.so",
   "abi": "arm64-v8a"
 }

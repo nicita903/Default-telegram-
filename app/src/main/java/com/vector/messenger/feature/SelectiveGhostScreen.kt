@@ -35,6 +35,7 @@ internal fun SelectiveGhostScreen(state: GhostState, enabled: (Boolean) -> Unit,
         }
     }
     LazyColumn(Modifier.fillMaxSize().testTag("privacy_scroll"), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        item { com.vector.messenger.calling.CallPrivacySettings(); DefaultRule() }
         item {
             Text("Ghost Mode", style = MaterialTheme.typography.headlineSmall)
             PreferenceToggle("Enable local suppression", state.saved.enabled, editable, enabled)
