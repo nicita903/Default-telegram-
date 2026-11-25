@@ -117,7 +117,7 @@ fun FloatingAudioPlayer(onOpen: (Long) -> Unit) {
 }
 
 @Composable
-fun VoiceMicrophone(chatId: Long, reply: Long?, enabled: Boolean, onTap: (() -> Unit)? = null) {
+fun VoiceMicrophone(chatId: Long, reply: Long?, enabled: Boolean, onTap: (() -> Unit)? = null, composerStyle: Boolean = false) {
     val vm = LocalVoiceViewModel.current ?: return
     val context = LocalContext.current
     val currentTap by rememberUpdatedState(onTap)
@@ -135,7 +135,9 @@ fun VoiceMicrophone(chatId: Long, reply: Long?, enabled: Boolean, onTap: (() -> 
         pulse = started
     }
     fun allowed() = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-    Box(Modifier.size(48.dp).excludeModuleGestures().background(DefaultDesign.colors.accent, DefaultDesign.controlShape)
+    val buttonColors = DefaultDesign.colors
+    Box(Modifier.size(48.dp).excludeModuleGestures().then(if (composerStyle) Modifier.composerRecordingSurface(enabled)
+        else Modifier.background(buttonColors.accent, DefaultDesign.controlShape))
         .semantics {
             contentDescription = "Record voice message"
             customActions = listOf(CustomAccessibilityAction("Start locked voice recording") { if (currentEnabled) { if (allowed()) vm.start(chatId, currentReply, locked = true) else permission.launch(Manifest.permission.RECORD_AUDIO) }; true })
@@ -188,7 +190,7 @@ fun VoiceMicrophone(chatId: Long, reply: Long?, enabled: Boolean, onTap: (() -> 
                 } finally { if (activated && !completed) vm.cancel() }
             }
         }, contentAlignment = Alignment.Center) {
-        Icon(VectorIcons.Microphone, null, Modifier.size(22.dp), tint = DefaultDesign.colors.onAccent)
+        Icon(VectorIcons.Microphone, null, Modifier.size(if (composerStyle) 20.dp else 22.dp), tint = if (composerStyle) buttonColors.text else buttonColors.onAccent)
     }
 }
 

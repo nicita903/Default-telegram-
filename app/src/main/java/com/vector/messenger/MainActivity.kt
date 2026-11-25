@@ -11,6 +11,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.Lifecycle
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.collect
+import com.vector.messenger.calling.TelegramCallPlatform
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.vector.messenger.design.DefaultTheme
 import com.vector.messenger.feature.ChatsViewModel
@@ -42,17 +48,52 @@ class MainActivity : ComponentActivity() {
     private val audio: com.vector.messenger.feature.audio.AudioViewModel by viewModels()
     private val voice: com.vector.messenger.feature.audio.VoiceViewModel by viewModels()
     @javax.inject.Inject lateinit var voiceCalls: com.vector.messenger.calling.TelegramVoiceCalls
+    private var pendingCallAnswer: android.content.Intent? = null
+    private var openedForCall = false
+    private var sawIncomingCall = false
+    private val callMicrophone = registerForActivityResult(androidx.activity.result.contract.ActivityResultContracts.RequestPermission()) { granted ->
+        val action = pendingCallAnswer; pendingCallAnswer = null
+        if (action != null) lifecycleScope.launch {
+            if (voiceCalls.resolveCallIntent(action)) {
+                if (granted) voiceCalls.answer() else voiceCalls.end("Microphone permission was denied.")
+            }
+        }
+    }
+    private fun handleCallIntent(action: android.content.Intent?) {
+        if (action == null || !voiceCalls.issuedCallIntent(action)) return
+        setShowWhenLocked(true); setTurnScreenOn(true)
+        lifecycleScope.launch {
+            lifecycle.currentStateFlow.first { it.isAtLeast(Lifecycle.State.RESUMED) }
+            if (!voiceCalls.resolveCallIntent(action)) { setShowWhenLocked(false); setTurnScreenOn(false); return@launch }
+            if (action.action == TelegramCallPlatform.ANSWER) {
+                if (androidx.core.content.ContextCompat.checkSelfPermission(this@MainActivity, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED)
+                    voiceCalls.answer()
+                else { pendingCallAnswer = action; callMicrophone.launch(android.Manifest.permission.RECORD_AUDIO) }
+            }
+        }
+    }
     private val callHistory: com.vector.messenger.calling.CallHistoryViewModel by viewModels()
     private val contactProfile: com.vector.messenger.feature.profile.ContactProfileViewModel by viewModels()
     private val videoNotes: com.vector.messenger.feature.video.VideoNoteViewModel by viewModels()
     private val music: com.vector.messenger.feature.music.MusicViewModel by viewModels()
     override fun onNewIntent(intent: android.content.Intent) {
-        super.onNewIntent(intent); setIntent(intent); notifications.accept(intent)
+        super.onNewIntent(intent); setIntent(intent); notifications.accept(intent); handleCallIntent(intent)
         if (intent.getBooleanExtra("open_music_player", false)) music.openPlayer()
     }
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         notifications.accept(intent)
+        openedForCall = savedInstanceState == null && intent?.action in setOf(TelegramCallPlatform.OPEN, TelegramCallPlatform.ANSWER)
+        handleCallIntent(intent)
+        lifecycleScope.launch {
+            voiceCalls.state.collect { call ->
+                if (call.phase == com.vector.messenger.calling.VoiceCallPhase.Incoming) sawIncomingCall = true
+                if (call.phase in setOf(com.vector.messenger.calling.VoiceCallPhase.Idle, com.vector.messenger.calling.VoiceCallPhase.Ended, com.vector.messenger.calling.VoiceCallPhase.Failed)) {
+                    setShowWhenLocked(false); setTurnScreenOn(false)
+                    if (openedForCall && sawIncomingCall && call.phase == com.vector.messenger.calling.VoiceCallPhase.Idle) finish()
+                }
+            }
+        }
         enableEdgeToEdge()
         val account = authentication // Starts/restores the process-owned Telegram session asynchronously.
         setContent {

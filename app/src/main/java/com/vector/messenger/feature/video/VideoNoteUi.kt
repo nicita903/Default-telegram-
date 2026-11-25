@@ -37,7 +37,7 @@ import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
 
 @Composable
-fun VideoNoteButton(chat: Long, reply: Long?, enabled: Boolean) {
+fun VideoNoteButton(chat: Long, reply: Long?, enabled: Boolean, composerStyle: Boolean = false) {
     val vm = LocalVideoNotes.current ?: return
     val context = LocalContext.current
     val density = LocalDensity.current.density
@@ -46,7 +46,9 @@ fun VideoNoteButton(chat: Long, reply: Long?, enabled: Boolean) {
     val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result -> if (!result.values.all { it }) vm.permissionDenied(chat) }
     fun allowed() = listOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO).all { ContextCompat.checkSelfPermission(context, it) == PackageManager.PERMISSION_GRANTED }
     fun begin(locked: Boolean = false) { if (allowed()) vm.start(chat, currentReply, locked) else explanation = true }
-    Box(Modifier.size(48.dp).excludeModuleGestures().background(DefaultDesign.colors.accent, DefaultDesign.controlShape)
+    val buttonColors = DefaultDesign.colors
+    Box(Modifier.size(48.dp).excludeModuleGestures().then(if (composerStyle) Modifier.composerRecordingSurface(enabled)
+        else Modifier.background(buttonColors.accent, DefaultDesign.controlShape))
         .semantics { contentDescription = "Video note camera"; onClick("Switch to voice messages") { vm.mode(false); true }
             customActions = listOf(CustomAccessibilityAction("Record locked video note") { if (enabled) begin(true); true }) }
         .pointerInput(chat, enabled) {
@@ -77,7 +79,7 @@ fun VideoNoteButton(chat: Long, reply: Long?, enabled: Boolean) {
                     }
                 } finally { if (!completed) vm.cancel() }
             }
-        }, contentAlignment = Alignment.Center) { Text("◉", color = DefaultDesign.colors.onAccent, style = MaterialTheme.typography.titleLarge) }
+        }, contentAlignment = Alignment.Center) { DesignIcon(VectorIcons.VideoCamera, null, Modifier.size(20.dp), tint = if (composerStyle) buttonColors.text else buttonColors.onAccent) }
     if (explanation) AlertDialog(onDismissRequest = { explanation = false }, title = { Text("Record a video note") },
         text = { Text("Camera and microphone access are used only while you record. After allowing access, hold the camera button again.") },
         confirmButton = { TextButton({ explanation = false; permissions.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)) }) { Text("Allow access") } },

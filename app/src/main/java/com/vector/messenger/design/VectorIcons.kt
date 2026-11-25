@@ -9,6 +9,11 @@ import androidx.compose.ui.unit.dp
 
 /** Small code-native line icons; no additional icon dependency. */
 object VectorIcons {
+    val Plus by lazy { icon("Plus") { moveTo(5f, 12f); lineTo(19f, 12f); moveTo(12f, 5f); lineTo(12f, 19f) } }
+    val Check by lazy { icon("Confirm") { moveTo(5f, 12f); lineTo(10f, 17f); lineTo(20f, 6f) } }
+    val Send by lazy { icon("Send") { moveTo(3f, 4f); lineTo(22f, 12f); lineTo(3f, 20f); lineTo(6f, 12f); close(); moveTo(6f, 12f); lineTo(22f, 12f) } }
+    val VideoCamera by lazy { icon("Video camera") { moveTo(4f, 5f); lineTo(14f, 5f); quadTo(16f, 5f, 16f, 7f); lineTo(16f, 17f); quadTo(16f, 19f, 14f, 19f); lineTo(4f, 19f); quadTo(2f, 19f, 2f, 17f); lineTo(2f, 7f); quadTo(2f, 5f, 4f, 5f); close(); moveTo(16f, 9f); lineTo(22f, 6f); lineTo(22f, 18f); lineTo(16f, 15f) } }
+
     val Views by lazy { icon("Views") {
         moveTo(2f, 12f); curveTo(7f, 3f, 17f, 3f, 22f, 12f); curveTo(17f, 21f, 7f, 21f, 2f, 12f); close()
         moveTo(15f, 12f); curveTo(15f, 16f, 9f, 16f, 9f, 12f); curveTo(9f, 8f, 15f, 8f, 15f, 12f); close()

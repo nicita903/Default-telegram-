@@ -45,6 +45,7 @@ kotlin {
 }
 
 dependencies {
+    implementation("androidx.core:core-telecom:1.0.0") // Official stable baseline; compatible with the existing SDK/toolchain.
     implementation("androidx.camera:camera-camera2:1.5.0")
     implementation("androidx.camera:camera-lifecycle:1.5.0")
     implementation("androidx.camera:camera-video:1.5.0")

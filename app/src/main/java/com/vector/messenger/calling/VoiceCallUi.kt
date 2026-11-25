@@ -52,13 +52,18 @@ import kotlinx.coroutines.delay
 fun VoiceCallButton(user: Long) {
     val calls = LocalVoiceCalls.current ?: return
     val context = LocalContext.current
+    val state by calls.state.collectAsStateWithLifecycle()
+    val ongoing = state.phase !in listOf(VoiceCallPhase.Idle, VoiceCallPhase.Ended, VoiceCallPhase.Failed)
+    val sameCall = ongoing && state.user == user
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) calls.outgoing(user) else calls.permissionDenied()
+        if (granted) { if (!calls.showCall(user)) calls.outgoing(user) } else calls.permissionDenied()
     }
-    CallControl(CallIcons.Phone, "Start voice call", {
-        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) calls.outgoing(user)
-        else permission.launch(Manifest.permission.RECORD_AUDIO)
-    }, diameter = 48.dp, quiet = true)
+    DefaultIconControl(CallIcons.Phone, if (sameCall) "Return to voice call" else "Start voice call", {
+        if (!calls.showCall(user)) {
+            if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) calls.outgoing(user)
+            else permission.launch(Manifest.permission.RECORD_AUDIO)
+        }
+    }, Modifier.excludeModuleGestures(), enabled = !ongoing || sameCall, quiet = true)
 }
 
 @Composable
@@ -66,6 +71,8 @@ fun VoiceCallHost() {
     val calls = LocalVoiceCalls.current ?: return
     val state by calls.state.collectAsStateWithLifecycle()
     var minimized by rememberSaveable { mutableStateOf(false) }
+    val uiRequest by calls.callUiRequests.collectAsStateWithLifecycle()
+    LaunchedEffect(uiRequest) { if (uiRequest > 0) minimized = false }
     var options by remember { mutableStateOf(false) }
     var securityInfo by remember(state.id, state.security?.verificationEmojis) { mutableStateOf(false) }
     val security = state.security?.takeIf { it.callId == state.id && it.available &&

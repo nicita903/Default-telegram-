@@ -66,7 +66,7 @@ internal object NotificationWork {
         }
         val builder = OneTimeWorkRequestBuilder<NotificationDeliveryWorker>().setInputData(workDataOf("file" to id))
             .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, 15, TimeUnit.SECONDS)
-        if (expedited) builder.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
+        if (expedited && android.os.Build.VERSION.SDK_INT >= 31) builder.setExpedited(OutOfQuotaPolicy.RUN_AS_NON_EXPEDITED_WORK_REQUEST)
         WorkManager.getInstance(context).enqueueUniqueWork("notification:$id", ExistingWorkPolicy.KEEP, builder.build())
         PushDiagnostics.event(if (expedited) "expedited work enqueued; quota fallback allowed" else "ordinary work enqueued; Android may defer", id)
         return file
@@ -164,8 +164,8 @@ class DefaultPushService : FirebaseMessagingService() {
             val file = NotificationWork.enqueue(this, JSONObject().put("operation", "push").put("payload", payload.toString()),
                 event, expedited = high) ?: return
             // FCM runs this callback off Main. Persist first, then spend at most four seconds
-            // on immediate TDLib processing; the same per-event gate protects the worker race.
-            runBlocking(Dispatchers.IO) { withTimeoutOrNull(4_000) { NotificationWork.deliver(applicationContext, file) } }
+            // on immediate TDLib processing (eight for high-priority push); the same per-event gate protects the worker race.
+            runBlocking(Dispatchers.IO) { withTimeoutOrNull(if (high) 8_000L else 4_000L) { NotificationWork.deliver(applicationContext, file) } }
         } catch (_: Exception) { PushDiagnostics.event("FCM handoff failed", correlation) }
           catch (_: LinkageError) { PushDiagnostics.event("FCM native dependency unavailable", correlation) }
     }

@@ -28,7 +28,7 @@ import com.vector.messenger.design.DefaultAction
 import com.vector.messenger.design.DefaultDesign
 import com.vector.messenger.design.DefaultDialog
 import com.vector.messenger.design.DefaultHeader
-import com.vector.messenger.design.ConversationHeaderSubtitle
+import com.vector.messenger.design.ConversationHeaderStatus
 import com.vector.messenger.design.DefaultIconControl
 import com.vector.messenger.design.VectorMotionSpec
 import com.vector.messenger.design.backdropBlur
@@ -98,7 +98,6 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
         if (conversation && chatStatus.live && contact != null) chats.subtitle(contact.id, contact.userId, contact.kind)
         else kotlinx.coroutines.flow.flowOf(com.vector.core.ConversationSubtitle(if (chatStatus.live) "Telegram" else "Sample conversation"))
     }
-    val contactActivity by subtitleSource.collectAsStateWithLifecycle(initialValue = com.vector.core.ConversationSubtitle())
     LaunchedEffect(entry?.id, contact?.userId, chatStatus.session) { if (conversation && chatStatus.live) chats.observePresence(contact?.userId) }
     val gesture = remember { VectorGestureController() }
     val exclusions = remember { GestureExclusions() }
@@ -211,7 +210,8 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                                     else -> "Connecting to Telegram…"
                                 }
                             } else "",
-                        subtitleContent = if (conversation) ({ ConversationHeaderSubtitle(contactActivity) }) else null,
+                        compactConversation = conversation,
+                        subtitleContent = if (conversation) ({ key(entry?.id, chatStatus.session) { ConversationHeaderStatus(subtitleSource) } }) else null,
                         avatarName = if (conversation) contact?.title else null,
                         avatarPhoto = if (conversation) contact?.photo else null,
                         avatarId = if (conversation) contact?.let { it.userId ?: it.id } ?: 0 else 0,
@@ -219,7 +219,7 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                         onContact = if (conversation && chatStatus.live && contact != null) ({ contactProfileChat = contact.id }) else null,
                         // Root controls stay on the edges; nested screens retain their Back action.
                         leading = {
-                            if (internalBack || searchVisible) {
+                            if (internalBack || searchVisible || conversation) {
                                 DefaultIconControl(Icons.AutoMirrored.Filled.ArrowBack,
                                     if (profileOpen) "Back from profile" else if (searchVisible) "Close search" else if (conversation && displayedModule == AppModule.Contacts) "Back to contacts" else if (conversation) "Back to chats" else "Back within module",
                                     { if (searchVisible) closeSearch() else if (profileOpen) profileBack() else nav.popBackStack() },
@@ -238,7 +238,11 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                                         Modifier.excludeModuleGestures(), compact = true, enabled = !posting.posting)
                                 }
                             }
-                            else if (conversation && contact != null) com.vector.messenger.feature.ConversationOptions(contact, chats)
+                            else if (conversation && contact != null) {
+                                if (chatStatus.live && contact.kind == com.vector.core.ChatKind.Contact)
+                                    contact.userId?.takeIf { it > 0 }?.let { com.vector.messenger.calling.VoiceCallButton(it) }
+                                com.vector.messenger.feature.ConversationOptions(contact, chats)
+                            }
                             else if (internalBack && !conversation) DefaultIconControl(Icons.Default.Menu, "Open navigation", { menu = true },
                                 Modifier.excludeModuleGestures(), quiet = true)
                             else if (!conversation && displayedModule == AppModule.Chats) DefaultIconControl(Icons.Default.Add, "New chat", { newMessage = true },

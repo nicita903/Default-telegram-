@@ -149,7 +149,7 @@ class TelegramConversationActivity @Inject constructor(private val manager: Tdli
                 PresenceKind.Recently -> "last seen recently"; PresenceKind.WithinWeek -> "last seen within a week"
                 PresenceKind.WithinMonth -> "last seen within a month"; else -> if (kind == ChatKind.Group) "group" else if (kind == ChatKind.Channel) "channel" else "last seen unavailable"
             }
-            ConversationSubtitle(text, online = value?.kind == PresenceKind.Online)
+            ConversationSubtitle(text, online = value?.kind == PresenceKind.Online, presence = value)
         }
     }.distinctUntilChanged()
 }

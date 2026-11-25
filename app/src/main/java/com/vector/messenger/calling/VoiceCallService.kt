@@ -28,15 +28,9 @@ class VoiceCallService : Service() {
         val token = intent?.getLongExtra("attempt", -1L) ?: -1L
         if (token < 0 || !calls.ownsServiceAttempt(token)) { stopSelf(startId); return START_NOT_STICKY }
         attempt = token
-        val open = PendingIntent.getActivity(this, 8401, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val endIntent = Intent(this, VoiceCallService::class.java).setAction("end")
-            .setData(android.net.Uri.parse("default://call/end/$token")).putExtra("attempt", token)
-        val end = PendingIntent.getService(this, 8402, endIntent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
-        val notice = NotificationCompat.Builder(this, "default_voice_calls").setSmallIcon(android.R.drawable.stat_sys_phone_call)
-            .setContentTitle("Default voice call").setContentText("Tap to return to the call").setContentIntent(open)
-            .setOngoing(true).setCategory(NotificationCompat.CATEGORY_CALL).setOnlyAlertOnce(true)
-            .addAction(0, "End call", end).build()
-        try { ServiceCompat.startForeground(this, 8400, notice, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE) }
+        val notice = calls.platform.foregroundNotification()
+        if (notice == null) { stopSelf(startId); return START_NOT_STICKY }
+        try { ServiceCompat.startForeground(this, TelegramCallPlatform.ID, notice, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL) }
         catch (_: RuntimeException) { calls.serviceStopped(attempt); stopSelf(startId) }
         return START_NOT_STICKY
     }

@@ -47,6 +47,7 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
         .filter { it.epoch == sessionEpoch && authorized }.map { it.value }
     private val callTypes = setOf("updateCall", "updateNewCallSignalingData")
     private val callEvents = Channel<AvatarEnvelope>(Channel.UNLIMITED)
+    private val restoringCallUpdates = ArrayDeque<JSONObject>()
     internal val callUpdates = callEvents.receiveAsFlow().filter { it.epoch == sessionEpoch && authorized }.map { it.value }
     private val contactLibraryTypes = setOf("updateNewMessage", "updateDeleteMessages", "updateMessageContent", "updateUser", "updateUserFullInfo", "updateChatNotificationSettings")
     private val contactLibraryEvents = MutableSharedFlow<AvatarEnvelope>(extraBufferCapacity = 64)
@@ -173,7 +174,10 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                         if (authorized && json.optString("@type") in mediaTypes) mediaEvents.emit(json)
                         if (authorized && json.optString("@type") in activityTypes) activityEvents.emit(AvatarEnvelope(sessionEpoch, json))
                         if (authorized && json.optString("@type") in storyTypes) storyEvents.emit(AvatarEnvelope(sessionEpoch, json))
-                        if (authorized && json.optString("@type") in callTypes) callEvents.send(AvatarEnvelope(sessionEpoch, json))
+                        if (json.optString("@type") in callTypes) {
+                            if (authorized) callEvents.send(AvatarEnvelope(sessionEpoch, json))
+                            else if (restoringCallUpdates.size < 64) restoringCallUpdates.addLast(json)
+                        }
                         if (authorized && json.optString("@type") in contactLibraryTypes) contactLibraryEvents.emit(AvatarEnvelope(sessionEpoch, json))
                         if (authorized && json.optString("@type") in avatarTypes) avatarEvents.emit(AvatarEnvelope(sessionEpoch, json))
                         if (authorized && (json.optString("@type") == "updateUserPrivacySettingRules" || json.optString("@type") == "updateUser")) ghostEvents.emit(json)
@@ -185,9 +189,14 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                             actionTargets.clear()
                             while (messagingEvents.tryReceive().isSuccess) { /* Discard prior-session account data. */ }
                         }
+                        if (auth.optString("@type") in setOf("authorizationStateWaitPhoneNumber", "authorizationStateLoggingOut", "authorizationStateClosed")) restoringCallUpdates.clear()
                         when (auth.optString("@type")) {
                             "authorizationStateLoggingOut" -> { logoutConfirmed = true; events.send(AuthStep.LoggingOut) }
-                            "authorizationStateReady" -> { logoutConfirmed = false; events.send(AuthStep.Ready) }
+                            "authorizationStateReady" -> {
+                                logoutConfirmed = false
+                                while (restoringCallUpdates.isNotEmpty()) callEvents.send(AvatarEnvelope(sessionEpoch, restoringCallUpdates.removeFirst()))
+                                events.send(AuthStep.Ready)
+                            }
                             "authorizationStateWaitTdlibParameters" -> scope.launch(Dispatchers.IO) { initialize(configuration) }
                             "authorizationStateClosed" -> {
                                 lifecycle.withLock {

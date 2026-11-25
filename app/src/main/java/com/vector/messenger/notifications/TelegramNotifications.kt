@@ -34,7 +34,8 @@ import java.util.UUID
 class TelegramNotifications @Inject constructor(@ApplicationContext private val context: Context,
     private val manager: TdlibClientManager, private val auth: AuthenticationRepository, private val profile: ProfileRepository,
     val preferences: NotificationPreferenceStore, private val scope: CoroutineScope,
-    private val avatars: TdlibAvatarClient, private val pushRegistration: TelegramPushRegistration) {
+    private val avatars: TdlibAvatarClient, private val pushRegistration: TelegramPushRegistration,
+    private val calls: com.vector.messenger.calling.TelegramVoiceCalls) {
     private data class Group(val id: Int, val chat: Long, val mention: Boolean, var count: Int = 0,
         val messages: MutableMap<Int, JSONObject> = linkedMapOf(), var sound: Boolean = false, var settingsChat: Long = chat)
     private val groups = linkedMapOf<Int, Group>()
@@ -229,6 +230,7 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
     }
     private fun isSupported(type: JSONObject?) = type?.optString("@type") in setOf("notificationGroupTypeMessages", "notificationGroupTypeMentions")
     private suspend fun reduce(value: JSONObject) {
+        calls.callNotification(value)
         when (value.optString("@type")) {
             "updateHavePendingNotifications" -> pending.value = value.optBoolean("have_delayed_notifications") || value.optBoolean("have_unreceived_notifications")
             "updateActiveNotifications" -> {
@@ -547,6 +549,7 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
         manager.flushNotificationUpdates()
         withTimeoutOrNull(15_000) { pending.first { !it } } ?: return@withContext false
         manager.flushNotificationUpdates()
+        if (!calls.awaitBackgroundCall()) return@withContext false
         PushDiagnostics.event("push processing completed", correlation)
         true
         } finally { pushCorrelation = null }
