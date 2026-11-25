@@ -31,7 +31,7 @@ std::string string(JNIEnv *env, jstring value) {
 struct Session {
     jlong id = 0;
     jobject listener = nullptr;
-    jmethodID stateMethod = nullptr, signalMethod = nullptr;
+    jmethodID stateMethod = nullptr, signalMethod = nullptr, releasedMethod = nullptr;
     std::mutex mutex;
     std::atomic<bool> closing{false};
     std::unique_ptr<tgcalls::Instance> instance;
@@ -116,8 +116,12 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_vector_messenger_calling_TgCallsBrid
     session->listener = env->NewGlobalRef(listener);
     if (!session->listener || env->ExceptionCheck()) return 0;
     auto type = env->GetObjectClass(listener);
+    if (!type || env->ExceptionCheck()) return 0;
     session->stateMethod = env->GetMethodID(type, "onNativeState", "(JI)V");
+    if (env->ExceptionCheck()) { env->DeleteLocalRef(type); return 0; }
     session->signalMethod = env->GetMethodID(type, "onNativeSignal", "(J[B)V");
+    if (env->ExceptionCheck()) { env->DeleteLocalRef(type); return 0; }
+    session->releasedMethod = env->GetMethodID(type, "onNativeReleased", "(J)V");
     env->DeleteLocalRef(type);
     if (env->ExceptionCheck()) return 0;
     tgcalls::Descriptor descriptor{.encryptionKey = tgcalls::EncryptionKey(key, options["outgoing"].bool_value())};
@@ -159,19 +163,28 @@ extern "C" JNIEXPORT jlong JNICALL Java_com_vector_messenger_calling_TgCallsBrid
     if (env->ExceptionCheck()) env->ExceptionClear();
     return 0;
 }
-extern "C" JNIEXPORT void JNICALL Java_com_vector_messenger_calling_TgCallsBridge_nativeMute(JNIEnv *, jobject, jlong id, jboolean muted) {
-    auto session = find(id); if (!session) return;
+extern "C" JNIEXPORT jboolean JNICALL Java_com_vector_messenger_calling_TgCallsBridge_nativeMute(JNIEnv *, jobject, jlong id, jboolean muted) try {
+    auto session = find(id); if (!session) return JNI_FALSE;
     std::lock_guard<std::mutex> lock(session->mutex);
-    if (!session->closing && session->instance) session->instance->setMuteMicrophone(muted);
-}
-extern "C" JNIEXPORT void JNICALL Java_com_vector_messenger_calling_TgCallsBridge_nativeSignal(JNIEnv *env, jobject, jlong id, jbyteArray value) {
+    if (session->closing || !session->instance) return JNI_FALSE;
+    session->instance->setMuteMicrophone(muted);
+    return JNI_TRUE; // Engine accepted the request; this is not an audible test.
+} catch (...) { return JNI_FALSE; }
+extern "C" JNIEXPORT void JNICALL Java_com_vector_messenger_calling_TgCallsBridge_nativeSignal(JNIEnv *env, jobject, jlong id, jbyteArray value) try {
     auto session = find(id); if (!session || !value || env->GetArrayLength(value) > 1024 * 1024) return;
-    std::vector<uint8_t> data(env->GetArrayLength(value));
+    struct SensitiveData : std::vector<uint8_t> {
+        using std::vector<uint8_t>::vector;
+        ~SensitiveData() { OPENSSL_cleanse(data(), size()); }
+    } data(env->GetArrayLength(value));
     env->GetByteArrayRegion(value, 0, data.size(), reinterpret_cast<jbyte *>(data.data()));
     if (env->ExceptionCheck()) { OPENSSL_cleanse(data.data(), data.size()); return; }
     std::lock_guard<std::mutex> lock(session->mutex);
     if (!session->closing && session->instance) session->instance->receiveSignalingData(data);
-    OPENSSL_cleanse(data.data(), data.size());
+} catch (...) {
+    if (!env->ExceptionCheck()) {
+        auto type = env->FindClass("java/lang/IllegalStateException");
+        if (type) { env->ThrowNew(type, "Native signaling failed"); env->DeleteLocalRef(type); }
+    }
 }
 extern "C" JNIEXPORT void JNICALL Java_com_vector_messenger_calling_TgCallsBridge_nativeStop(JNIEnv *, jobject, jlong id) {
     auto session = find(id); if (!session) return;
@@ -181,6 +194,12 @@ extern "C" JNIEXPORT void JNICALL Java_com_vector_messenger_calling_TgCallsBridg
     session->closing = true;
     session->instance->stop([session](tgcalls::FinalState) {
         // Destroy away from engine threads, after its stop completion. No audio/state is persisted.
-        std::thread([session] { std::lock_guard<std::mutex> lock(session->mutex); session->instance.reset(); }).detach();
+        std::thread([session] {
+            { std::lock_guard<std::mutex> lock(session->mutex); session->instance.reset(); }
+            // The wrapper is destroyed; tgcalls schedules its internal teardown on its media thread.
+            auto env = webrtc::AttachCurrentThreadIfNeeded();
+            env->CallVoidMethod(session->listener, session->releasedMethod, session->id);
+            if (env->ExceptionCheck()) env->ExceptionClear();
+        }).detach();
     });
 }

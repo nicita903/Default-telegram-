@@ -33,6 +33,21 @@ file(COPY "${THIRDPARTY_DIR}/libvpx/vpx" DESTINATION "${COMPAT_INCLUDE}/third_pa
 include_directories("${COMPAT_INCLUDE}" "${TGX_ROOT}/app/jni/tgvoip/third_party")
 add_subdirectory("${TGX_ROOT}/app/jni/tgvoip" tgvoip EXCLUDE_FROM_ALL)
 set_property(TARGET tgcalls PROPERTY CXX_STANDARD 20)
+# Keep the pinned checkout untouched; change only Android's platform factory in a build copy.
+set(ANDROID_PLATFORM_SOURCE "${TGX_ROOT}/app/jni/tgvoip/third_party/tgcalls/tgcalls/platform/android/AndroidInterface.cpp")
+file(READ "${ANDROID_PLATFORM_SOURCE}" ANDROID_PLATFORM_CONTENT)
+set(FACTORY_ORIGINAL "return std::make_unique<AndroidInterface>();")
+string(FIND "${ANDROID_PLATFORM_CONTENT}" "${FACTORY_ORIGINAL}" FACTORY_POSITION)
+if(FACTORY_POSITION EQUAL -1)
+  message(FATAL_ERROR "Reviewed Android platform factory has changed")
+endif()
+string(REPLACE "${FACTORY_ORIGINAL}" "return std::make_unique<DefaultAndroidInterface>();" ANDROID_PLATFORM_CONTENT "${ANDROID_PLATFORM_CONTENT}")
+file(WRITE "${CMAKE_BINARY_DIR}/DefaultAndroidInterface.cpp" "#include \"${CMAKE_CURRENT_LIST_DIR}/NetworkAwareAndroidInterface.h\"\n${ANDROID_PLATFORM_CONTENT}")
+get_target_property(CALLING_SOURCES tgcalls SOURCES)
+list(FILTER CALLING_SOURCES EXCLUDE REGEX "platform/android/AndroidInterface\\.cpp$")
+set_property(TARGET tgcalls PROPERTY SOURCES ${CALLING_SOURCES} "${CMAKE_BINARY_DIR}/DefaultAndroidInterface.cpp")
+target_include_directories(tgcalls PRIVATE "${TGX_ROOT}/app/jni/tgvoip/third_party/tgcalls/tgcalls/platform/android")
+
 target_compile_options(tgcalls PRIVATE -Wno-deprecated-this-capture -Wno-error=reorder-ctor -Wno-error=unused-lambda-capture -Wno-error=unused-private-field)
 # The disabled FFmpeg software decoder's color-space helper is also omitted.
 get_target_property(WEBRTC_SOURCES webrtc SOURCES)

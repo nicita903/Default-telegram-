@@ -6,6 +6,7 @@ import org.json.JSONObject
 import kotlinx.coroutines.channels.Channel
 
 sealed interface NativeCallEvent {
+    data class Released(val handle: Long) : NativeCallEvent
     data class State(val handle: Long, val value: Int) : NativeCallEvent
     class Signal(val handle: Long, val bytes: ByteArray) : NativeCallEvent
 }
@@ -25,10 +26,11 @@ class TgCallsBridge(context: Context) {
     fun signal(handle: Long, data: ByteArray) = nativeSignal(handle, data)
     fun stop(handle: Long) = nativeStop(handle)
     @Keep fun onNativeState(handle: Long, state: Int) { events.trySend(NativeCallEvent.State(handle, state)) }
+    @Keep fun onNativeReleased(handle: Long) { events.trySend(NativeCallEvent.Released(handle)) }
     @Keep fun onNativeSignal(handle: Long, value: ByteArray) { events.trySend(NativeCallEvent.Signal(handle, value)) }
     private external fun nativeCapabilities(): String
     private external fun nativeCreate(version: String, key: ByteArray, options: String, listener: TgCallsBridge): Long
-    private external fun nativeMute(handle: Long, muted: Boolean)
+    private external fun nativeMute(handle: Long, muted: Boolean): Boolean
     private external fun nativeSignal(handle: Long, data: ByteArray)
     private external fun nativeStop(handle: Long)
 }

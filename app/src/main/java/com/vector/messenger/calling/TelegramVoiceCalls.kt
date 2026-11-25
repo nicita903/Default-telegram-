@@ -2,6 +2,11 @@ package com.vector.messenger.calling
 
 import android.Manifest
 import android.content.Context
+import android.content.BroadcastReceiver
+import android.content.Intent
+import android.content.IntentFilter
+import android.os.Handler
+import android.os.Looper
 import android.content.pm.PackageManager
 import android.media.*
 import android.os.Build
@@ -16,6 +21,9 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.channels.Channel
+import com.vector.core.messaging.MessagingException
+import com.vector.core.messaging.MessagingFailure
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -27,7 +35,7 @@ data class CallSecurityUiState(val callId: Int, val verificationEmojis: List<Str
 }
 enum class VoiceCallPhase { Idle, Requesting, Incoming, Ringing, Connecting, Active, Reconnecting, Ending, Ended, Failed }
 data class VoiceCallState(val id: Int = 0, val user: Long = 0, val name: String = "", val phase: VoiceCallPhase = VoiceCallPhase.Idle,
-    val muted: Boolean = false, val speaker: Boolean = false, val connectedAt: Long = 0, val error: String? = null, val outgoing: Boolean = false, val video: Boolean = false, val security: CallSecurityUiState? = null) {
+    val muted: Boolean = false, val speaker: Boolean = false, val connectedAt: Long = 0, val error: String? = null, val outgoing: Boolean = false, val video: Boolean = false, val security: CallSecurityUiState? = null, val audioOutput: Int = AudioDeviceInfo.TYPE_UNKNOWN) {
     override fun toString() = "VoiceCallState([redacted])"
 }
 
@@ -52,6 +60,15 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
     private val buffered = ArrayDeque<ByteArray>()
     private var requestJob: Job? = null
     private var mediaJob: Job? = null
+    private var networkJob: Job? = null
+    private var signalJob: Job? = null
+    private var signals: Channel<ByteArray>? = null
+    private var routeCallback: AudioDeviceCallback? = null
+    private var routeListener: AudioManager.OnCommunicationDeviceChangedListener? = null
+    private var scoReceiver: BroadcastReceiver? = null
+    private var scoConnected = false
+    private var requestedDevice: Int? = null
+    private val releasing = mutableSetOf<Long>()
     fun start() {
         if (started) return; started = true
         scope.launch { profile.state.map { it.profile?.id?.takeIf { _ -> it.authenticated } }.distinctUntilChanged().collect { account ->
@@ -84,18 +101,19 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
         scope.launch { for (event in created.events) when (event) {
             is NativeCallEvent.State -> if (event.handle == handle && !ending) when (event.value) {
                 2 -> {
-                    if (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) android.util.Log.i("DefaultVoiceCall", "Native media established")
+                    callDiagnostic(context, if (state.value.connectedAt > 0) CallEvent.Recovered else CallEvent.Established)
                     mutable.update { it.copy(phase = VoiceCallPhase.Active, security = it.security?.copy(stage = CallSecurityStage.MediaEstablished), connectedAt = it.connectedAt.takeIf { value -> value > 0 } ?: SystemClock.elapsedRealtime()) }
                 }
                 3 -> end("Voice transport failed.")
-                4 -> mutable.update { it.copy(phase = VoiceCallPhase.Reconnecting) }
+                4 -> {
+                    callDiagnostic(context, CallEvent.Reconnecting)
+                    mutable.update { it.copy(phase = if (it.connectedAt > 0) VoiceCallPhase.Reconnecting else VoiceCallPhase.Connecting) }
+                }
             }
-            is NativeCallEvent.Signal -> { try { if (event.handle == handle && !ending) {
-                val id = state.value.id; val account = owner
-                try { call(request("sendCallSignalingData", "call_id" to id, "data" to Base64.encodeToString(event.bytes, Base64.NO_WRAP)), account) }
-                catch (cancelled: CancellationException) { throw cancelled }
-                catch (_: Exception) { if (owner == account && state.value.id == id && event.handle == handle) end("Telegram signaling failed.") }
-                } } finally { event.bytes.fill(0) } }
+            is NativeCallEvent.Released -> { releasing.remove(event.handle); callDiagnostic(context, CallEvent.NativeReleased) }
+            is NativeCallEvent.Signal -> {
+                if (event.handle != handle || ending || signals?.trySend(event.bytes)?.isSuccess != true) event.bytes.fill(0)
+            }
         } }
         return created
     }
@@ -107,7 +125,9 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
     fun outgoing(user: Long) {
         start()
         if (owner == 0L || user <= 0 || state.value.phase !in listOf(VoiceCallPhase.Idle, VoiceCallPhase.Ended, VoiceCallPhase.Failed)) return
+        if (releasing.isNotEmpty() || requestJob?.isActive == true) return
         ending = false; val attemptId = ++attempt
+        callDiagnostic(context, CallEvent.Created)
         mutable.value = VoiceCallState(user = user, phase = VoiceCallPhase.Requesting, outgoing = true)
         val token = epoch; val account = owner
         requestJob = scope.launch {
@@ -132,11 +152,12 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
         }
     }
     fun answer() {
-        if (state.value.phase != VoiceCallPhase.Incoming) return
+        if (state.value.phase != VoiceCallPhase.Incoming || releasing.isNotEmpty()) return
         val id = state.value.id; val account = owner; val token = epoch
         mutable.update { it.copy(phase = VoiceCallPhase.Connecting) }
         scope.launch {
-            try { val nativeProtocol = protocol(); checkPermission(); acquireAudio(); call(request("acceptCall", "call_id" to id, "protocol" to nativeProtocol), account) }
+            try { val nativeProtocol = protocol(); if (epoch != token || state.value.id != id || ending) return@launch
+                checkPermission(); acquireAudio(); call(request("acceptCall", "call_id" to id, "protocol" to nativeProtocol), account) }
             catch (_: LinkageError) { if (epoch == token && state.value.id == id) end("Native voice engine unavailable.") }
             catch (_: Exception) { if (epoch == token && state.value.id == id) end("Unable to answer. Check microphone permission and connection.") }
         }
@@ -146,7 +167,8 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
         if (state.value.id != id) {
             if (state.value.phase == VoiceCallPhase.Requesting && outgoing && state.value.user == user) mutable.update { it.copy(id = id) }
             else if (!outgoing && value.optJSONObject("state")?.optString("@type") == "callStatePending" && state.value.phase in listOf(VoiceCallPhase.Idle, VoiceCallPhase.Ended, VoiceCallPhase.Failed)) {
-                ending = false
+                ending = false; attempt++
+                callDiagnostic(context, CallEvent.Created)
                 mutable.value = VoiceCallState(id, user, phase = VoiceCallPhase.Incoming, video = value.optBoolean("is_video"),
                     error = if (value.optBoolean("is_video")) "Video calling is not supported. You can decline this call." else null)
                 val identity = transport.user(call(request("getUser", "user_id" to user)))
@@ -204,35 +226,125 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
             val connect = call(request("getOption", "name" to "call_connect_timeout_ms"), account).optLong("value", 30000) / 1000.0
             val packet = call(request("getOption", "name" to "call_packet_timeout_ms"), account).optLong("value", 10000) / 1000.0
             if (!current()) return
+            callDiagnostic(context, CallEvent.Connecting)
             handle = engine.create(version, key, JSONObject().put("outgoing", outgoing).put("servers", servers)
                 .put("p2p", ready.optBoolean("allow_p2p") && remote.optBoolean("udp_p2p"))
                 .put("layer", minOf(remote.getInt("max_layer"), engine.capabilities.getInt("layer"))).put("custom", ready.optString("custom_parameters"))
                 .put("connectTimeout", connect).put("packetTimeout", packet))
+            startSignaling(handle, callId, account, token)
+            callDiagnostic(context, CallEvent.EngineInitialized)
             mutable.update { it.copy(security = it.security?.copy(stage = CallSecurityStage.MediaInitialized)) }
             while (buffered.isNotEmpty()) buffered.removeFirst().let { try { engine.signal(handle, it) } finally { it.fill(0) } }
         } finally { key.fill(0) }
     }
-    fun mute() { if (handle == 0L || ending) return; val next = !state.value.muted; bridge?.mute(handle, next); mutable.update { it.copy(muted = next) } }
-    fun speaker() {
-        val next = !state.value.speaker
+    private fun startSignaling(native: Long, id: Int, account: Long, token: Long) {
+        val queue = Channel<ByteArray>(16, onUndeliveredElement = { it.fill(0) })
+        signals = queue
+        signalJob = scope.launch {
+            for (bytes in queue) try {
+                var retries = 0
+                while (!ending && handle == native && owner == account && epoch == token && state.value.id == id) {
+                    try {
+                        call(request("sendCallSignalingData", "call_id" to id, "data" to Base64.encodeToString(bytes, Base64.NO_WRAP)), account)
+                        break
+                    } catch (cancelled: CancellationException) { throw cancelled }
+                    catch (failure: Exception) {
+                        if (failure is MessagingException && failure.failure == MessagingFailure.Network) {
+                            callDiagnostic(context, CallEvent.SignalingDeferred)
+                            // Signaling is an unreliable transport. Bound retries; the engine owns ICE recovery/fatal timeout.
+                            if (retries == 3) break
+                            delay(1000L shl retries++)
+                        } else {
+                            if (epoch == token && handle == native && !ending) end("Telegram signaling failed.")
+                            break
+                        }
+                    }
+                }
+            } finally { bytes.fill(0) }
+        }
+    }
+    fun mute() {
+        if (handle == 0L || ending) return
+        val next = !state.value.muted
+        if (bridge?.mute(handle, next) == true) mutable.update { it.copy(muted = next) }
+    }
+    private fun currentOutput(): Int = if (Build.VERSION.SDK_INT >= 31) audio.communicationDevice?.type ?: AudioDeviceInfo.TYPE_UNKNOWN
+        else if (scoConnected) AudioDeviceInfo.TYPE_BLUETOOTH_SCO
+        else if (audio.isSpeakerphoneOn) AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+        else audio.getDevices(AudioManager.GET_DEVICES_OUTPUTS).firstOrNull { it.type in listOf(AudioDeviceInfo.TYPE_WIRED_HEADSET,
+            AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_USB_HEADSET) }?.type ?: AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
+    private fun updateOutput() {
+        try {
+            val output = currentOutput()
+            if (state.value.audioOutput != output) callDiagnostic(context, CallEvent.RouteChanged)
+            mutable.update { it.copy(audioOutput = output, speaker = output == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) }
+        } catch (_: SecurityException) { mutable.update { it.copy(audioOutput = AudioDeviceInfo.TYPE_UNKNOWN, speaker = false) } }
+    }
+    private fun observeAudio() {
+        val callback = object : AudioDeviceCallback() {
+            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) { updateOutput() }
+            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) {
+                if (Build.VERSION.SDK_INT >= 31 && removedDevices.any { it.id == requestedDevice }) {
+                    requestedDevice = null
+                    runCatching { audio.clearCommunicationDevice(); choosePrivateOutput() }
+                }
+                updateOutput()
+            }
+        }
+        audio.registerAudioDeviceCallback(callback, Handler(Looper.getMainLooper())); routeCallback = callback
         if (Build.VERSION.SDK_INT >= 31) {
-            val type = if (next) AudioDeviceInfo.TYPE_BUILTIN_SPEAKER else AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
-            val device = audio.availableCommunicationDevices.firstOrNull { it.type == type } ?: return
-            if (!audio.setCommunicationDevice(device)) return
-        } else { @Suppress("DEPRECATION") audio.isSpeakerphoneOn = next }
-        mutable.update { it.copy(speaker = next) }
+            val listener = AudioManager.OnCommunicationDeviceChangedListener { updateOutput() }
+            audio.addOnCommunicationDeviceChangedListener(context.mainExecutor, listener); routeListener = listener
+        } else {
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    scoConnected = intent?.getIntExtra(AudioManager.EXTRA_SCO_AUDIO_STATE, -1) == AudioManager.SCO_AUDIO_STATE_CONNECTED
+                    updateOutput()
+                }
+            }
+            ContextCompat.registerReceiver(context, receiver, IntentFilter(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED), ContextCompat.RECEIVER_NOT_EXPORTED)
+            scoReceiver = receiver
+        }
+        updateOutput()
+    }
+    private fun choosePrivateOutput() {
+        if (Build.VERSION.SDK_INT >= 31) {
+            val devices = audio.availableCommunicationDevices
+            val device = devices.firstOrNull { it.type in listOf(AudioDeviceInfo.TYPE_WIRED_HEADSET, AudioDeviceInfo.TYPE_WIRED_HEADPHONES, AudioDeviceInfo.TYPE_USB_HEADSET) }
+                ?: devices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }
+            if (device != null && audio.setCommunicationDevice(device)) requestedDevice = device.id
+        }
+    }
+    fun speaker() {
+        if (focus == null || ending) return
+        try {
+            val next = currentOutput() != AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+            if (Build.VERSION.SDK_INT >= 31) {
+                val device = audio.availableCommunicationDevices.firstOrNull { it.type == if (next) AudioDeviceInfo.TYPE_BUILTIN_SPEAKER else AudioDeviceInfo.TYPE_BUILTIN_EARPIECE } ?: return
+                if (audio.setCommunicationDevice(device)) requestedDevice = device.id
+            } else {
+                audio.stopBluetoothSco(); audio.isBluetoothScoOn = false; scoConnected = false
+                audio.isSpeakerphoneOn = next
+            }
+            updateOutput()
+        } catch (_: SecurityException) { mutable.update { it.copy(error = "Audio route is unavailable.") } }
     }
     fun bluetooth() {
+        if (focus == null || ending) return
         try {
             if (Build.VERSION.SDK_INT >= 31) {
                 val device = audio.availableCommunicationDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO || it.type == AudioDeviceInfo.TYPE_BLE_HEADSET } ?: return
-                if (audio.setCommunicationDevice(device)) mutable.update { it.copy(speaker = false) }
-            } else { @Suppress("DEPRECATION") audio.startBluetoothSco(); @Suppress("DEPRECATION") audio.isBluetoothScoOn = true }
+                if (audio.setCommunicationDevice(device)) requestedDevice = device.id
+            } else {
+                audio.isSpeakerphoneOn = false; audio.startBluetoothSco(); audio.isBluetoothScoOn = true
+            }
+            updateOutput() // Legacy SCO is confirmed by its broadcast, not by startBluetoothSco().
         } catch (_: SecurityException) { mutable.update { it.copy(error = "Allow nearby-device access to route audio to a Bluetooth headset.") } }
     }
     fun end(error: String? = null) {
-        if (ending || state.value.phase in listOf(VoiceCallPhase.Idle, VoiceCallPhase.Ended)) return
+        if (ending || state.value.phase in listOf(VoiceCallPhase.Idle, VoiceCallPhase.Ended, VoiceCallPhase.Failed)) return
         ending = true; attempt++
+        callDiagnostic(context, CallEvent.Terminating)
         val record = state.value; val account = owner; val token = epoch
         release()
         mutable.update { it.copy(phase = VoiceCallPhase.Ending) }
@@ -243,11 +355,18 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
             finally { if (epoch == token && state.value.id == record.id) mutable.update { it.copy(phase = if (error == null) VoiceCallPhase.Ended else VoiceCallPhase.Failed, error = error) } }
         }
     }
-    internal fun serviceStopped(serviceAttempt: Long) { if (serviceAttempt == attempt && focus != null) end("Call service stopped.") }
+    internal fun ownsServiceAttempt(serviceAttempt: Long) = serviceAttempt == attempt && focus != null && !ending
+    internal fun endServiceAttempt(serviceAttempt: Long) { if (ownsServiceAttempt(serviceAttempt)) end() }
+    internal fun serviceStopped(serviceAttempt: Long) {
+        callDiagnostic(context, CallEvent.ServiceStopped)
+        if (serviceAttempt == attempt && focus != null) end("Call service stopped.")
+    }
     fun dismiss() { if (state.value.phase in listOf(VoiceCallPhase.Ended, VoiceCallPhase.Failed)) mutable.value = VoiceCallState() }
     private fun checkPermission() { check(ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) }
     private fun acquireAudio() {
-        checkPermission(); player.stop()
+        checkPermission()
+        check(focus == null) { "Call audio already acquired" }
+        player.stop()
         previousMode = audio.mode; @Suppress("DEPRECATION") val old = audio.isSpeakerphoneOn; previousSpeaker = old
         if (Build.VERSION.SDK_INT >= 31) priorDevice = audio.communicationDevice
         val request = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN_TRANSIENT).setAudioAttributes(AudioAttributes.Builder()
@@ -257,21 +376,51 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
         focus = request
         ContextCompat.startForegroundService(context, android.content.Intent(context, VoiceCallService::class.java).putExtra("attempt", attempt))
         audio.mode = AudioManager.MODE_IN_COMMUNICATION
-        if (Build.VERSION.SDK_INT >= 31) audio.availableCommunicationDevices.firstOrNull { it.type == AudioDeviceInfo.TYPE_BUILTIN_EARPIECE }?.let { audio.setCommunicationDevice(it) }
-        else { @Suppress("DEPRECATION") audio.isSpeakerphoneOn = false }
+        if (Build.VERSION.SDK_INT >= 31) choosePrivateOutput()
+        else { audio.isSpeakerphoneOn = false }
+        observeAudio()
+        networkJob = scope.launch {
+            try { telegramNetworkChanges(context).collect { callDiagnostic(context, CallEvent.NetworkChanged) } }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { /* Native WebRTC monitoring remains authoritative. */ }
+        }
         ending = false
+    }
+    private fun cleanup(action: () -> Unit) {
+        try { action() } catch (_: Exception) { callDiagnostic(context, CallEvent.CleanupFailure) }
     }
     private fun release() {
         mediaJob?.cancel(); mediaJob = null
-        mutable.update { it.copy(security = null) }
-        context.stopService(android.content.Intent(context, VoiceCallService::class.java))
-        val old = handle; handle = 0; if (old != 0L) bridge?.stop(old)
-        buffered.forEach { it.fill(0) }; buffered.clear()
-        if (focus != null) {
-            if (Build.VERSION.SDK_INT >= 31) { audio.clearCommunicationDevice(); priorDevice?.let { audio.setCommunicationDevice(it) } }
-            else { @Suppress("DEPRECATION") audio.stopBluetoothSco(); @Suppress("DEPRECATION") audio.isBluetoothScoOn = false; @Suppress("DEPRECATION") audio.isSpeakerphoneOn = previousSpeaker }
-            audio.mode = previousMode; focus?.let(audio::abandonAudioFocusRequest); focus = null
+        signalJob?.cancel(); signalJob = null; signals?.cancel(); signals = null
+        networkJob?.cancel(); networkJob = null
+        mutable.update { it.copy(security = null, muted = false, speaker = false, audioOutput = AudioDeviceInfo.TYPE_UNKNOWN) }
+        val old = handle; handle = 0
+        if (old != 0L) {
+            releasing.add(old)
+            cleanup { bridge?.stop(old); callDiagnostic(context, CallEvent.NativeStopRequested) }
         }
+        buffered.forEach { it.fill(0) }; buffered.clear()
+        val callback = routeCallback; routeCallback = null
+        if (callback != null) cleanup { audio.unregisterAudioDeviceCallback(callback) }
+        val listener = routeListener; routeListener = null
+        if (Build.VERSION.SDK_INT >= 31 && listener != null) cleanup { audio.removeOnCommunicationDeviceChangedListener(listener) }
+        val receiver = scoReceiver; scoReceiver = null
+        if (receiver != null) cleanup { context.unregisterReceiver(receiver) }
+        val oldFocus = focus; focus = null
+        if (oldFocus != null) {
+            if (Build.VERSION.SDK_INT >= 31) {
+                cleanup { audio.clearCommunicationDevice() }
+                val previous = priorDevice; priorDevice = null
+                if (previous != null) cleanup { audio.availableCommunicationDevices.firstOrNull { it.id == previous.id }?.let { audio.setCommunicationDevice(it) } }
+            } else {
+                cleanup { audio.stopBluetoothSco() }; cleanup { audio.isBluetoothScoOn = false }
+                cleanup { audio.isSpeakerphoneOn = previousSpeaker }
+            }
+            cleanup { audio.mode = previousMode }
+            cleanup { audio.abandonAudioFocusRequest(oldFocus) }
+        }
+        requestedDevice = null; scoConnected = false
+        cleanup { context.stopService(Intent(context, VoiceCallService::class.java)) }
     }
     fun permissionDenied() { if (state.value.phase !in listOf(VoiceCallPhase.Idle, VoiceCallPhase.Ended, VoiceCallPhase.Failed)) return; fail("Microphone permission is required to make or answer a voice call.") }
     private fun fail(reason: String) { ending = true; attempt++; release(); mutable.update { it.copy(phase = VoiceCallPhase.Failed, error = reason) } }

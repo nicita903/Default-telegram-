@@ -95,7 +95,7 @@ fun VoiceCallHost() {
         if (!terminal) FloatingCallIndicator(state, if (state.connectedAt > 0) callTime(seconds) else status) { minimized = false }
         return
     }
-    val output = rememberCallOutput(state.speaker, state.phase)
+    val output = state.audioOutput
     val speaker = output == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
     val route = when (output) {
         AudioDeviceInfo.TYPE_BUILTIN_SPEAKER -> "Speaker on"
@@ -257,30 +257,6 @@ private fun FloatingCallIndicator(state: VoiceCallState, time: String, onOpen: (
 
 /** Observation only: routing commands remain exclusively in the existing call controller. */
 @Suppress("DEPRECATION")
-@Composable
-private fun rememberCallOutput(requestedSpeaker: Boolean, phase: VoiceCallPhase): Int {
-    val context = LocalContext.current
-    val audio = remember(context) { context.getSystemService(AudioManager::class.java) }
-    fun read() = try { if (Build.VERSION.SDK_INT >= 31) audio.communicationDevice?.type ?: AudioDeviceInfo.TYPE_UNKNOWN
-        else if (audio.isSpeakerphoneOn) AudioDeviceInfo.TYPE_BUILTIN_SPEAKER else AudioDeviceInfo.TYPE_BUILTIN_EARPIECE
-    } catch (_: SecurityException) { AudioDeviceInfo.TYPE_UNKNOWN }
-    var output by remember(audio) { mutableIntStateOf(read()) }
-    LaunchedEffect(requestedSpeaker, phase) { output = read() }
-    DisposableEffect(audio) {
-        val callback = object : AudioDeviceCallback() {
-            override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>) { output = read() }
-            override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>) { output = read() }
-        }
-        audio.registerAudioDeviceCallback(callback, Handler(Looper.getMainLooper()))
-        val listener = if (Build.VERSION.SDK_INT >= 31) AudioManager.OnCommunicationDeviceChangedListener { output = read() } else null
-        if (Build.VERSION.SDK_INT >= 31 && listener != null) audio.addOnCommunicationDeviceChangedListener(context.mainExecutor, listener)
-        onDispose {
-            audio.unregisterAudioDeviceCallback(callback)
-            if (Build.VERSION.SDK_INT >= 31 && listener != null) audio.removeOnCommunicationDeviceChangedListener(listener)
-        }
-    }
-    return output
-}
 private fun callTime(seconds: Long) = "%02d:%02d".format(java.util.Locale.ROOT, seconds.coerceAtLeast(0) / 60, seconds.coerceAtLeast(0) % 60)
 private fun callStatus(phase: VoiceCallPhase) = when (phase) {
     VoiceCallPhase.Incoming -> "Incoming call"; VoiceCallPhase.Requesting -> "Calling…"; VoiceCallPhase.Ringing -> "Ringing…"
