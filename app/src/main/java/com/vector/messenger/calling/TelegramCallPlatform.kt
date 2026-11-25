@@ -8,6 +8,9 @@ import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.telecom.DisconnectCause
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import androidx.core.app.NotificationCompat
 import androidx.core.app.Person
 import androidx.core.graphics.drawable.IconCompat
@@ -41,7 +44,7 @@ class TelegramCallPlatform @Inject constructor(@ApplicationContext private val c
         private const val ONGOING = "default_voice_calls"
         private const val MISSED = "telegram_missed_calls_v1"
     }
-    private class Entry(val key: PlatformCall, val nonce: String) {
+    private class Entry(val key: PlatformCall, val nonce: String, val outgoing: Boolean) {
         val ready = CompletableDeferred<Unit>()
         var control: CallControlScope? = null
         var job: Job? = null
@@ -49,15 +52,23 @@ class TelegramCallPlatform @Inject constructor(@ApplicationContext private val c
         var endpoints = emptyList<CallEndpointCompat>()
         var person: Person? = null
         var ringing = false
+        var foreground = false
+        var operation = "addCall"
     }
     private lateinit var calls: TelegramVoiceCalls
     private val system = context.getSystemService(NotificationManager::class.java)
     private val manager by lazy { CallsManager(context) }
     private var registered = false
+    private val registrationLock = Mutex()
     private var entry: Entry? = null
     private var closing: Job? = null
     fun attach(controller: TelegramVoiceCalls) {
         calls = controller; channels()
+        scope.launch {
+            try { register() }
+            catch (cancelled: CancellationException) { throw cancelled }
+            catch (error: Exception) { diagnose("registerAppWithTelecom", error = error) }
+        }
         // A prior process's local TDLib call IDs are not identities in this process.
         // New authenticated updateCall events will publish fresh notifications/capabilities.
         try { system.cancel(ID) } catch (_: Exception) { callDiagnostic(context, CallEvent.PlatformFailure) }
@@ -72,22 +83,52 @@ class TelegramCallPlatform @Inject constructor(@ApplicationContext private val c
         system.createNotificationChannel(NotificationChannel(ONGOING, "Voice calls", NotificationManager.IMPORTANCE_LOW).apply { setSound(null, null) })
         system.createNotificationChannel(NotificationChannel(MISSED, "Missed Telegram calls", NotificationManager.IMPORTANCE_DEFAULT))
     }
+    private fun diagnose(operation: String, value: Entry? = entry, error: Throwable? = null,
+        code: Int? = null, cancelled: Boolean = false, detail: String = "") {
+        telecomDiagnostic(context, operation, registered, value?.outgoing,
+            value?.control != null, cancelled, error, code, detail)
+    }
+    private suspend fun register() = registrationLock.withLock {
+        if (registered) return@withLock
+        check(entry?.control == null) { "Cannot register during an active Telecom session" }
+        diagnose("registerAppWithTelecom.begin")
+        withContext(Dispatchers.IO) { manager.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE) }
+        registered = true
+        // API 33 exposes only our accounts using the existing MANAGE_OWN_CALLS grant.
+        // Earlier Android versions are diagnosed externally rather than requesting phone access.
+        if (Build.VERSION.SDK_INT >= 33) try {
+            val telecom = context.getSystemService(android.telecom.TelecomManager::class.java)
+            diagnose("registerAppWithTelecom.complete", detail = "ownAccountExists=${telecom.ownSelfManagedPhoneAccounts.isNotEmpty()}")
+        } catch (error: Exception) { diagnose("inspectOwnPhoneAccount", error = error) }
+        else diagnose("registerAppWithTelecom.complete")
+    }
     internal fun current(key: PlatformCall) = entry?.key == key && calls.matches(key)
+    private suspend fun awaitReady(value: Entry) {
+        try { withTimeout(12_000) { value.ready.await() } }
+        catch (timeout: TimeoutCancellationException) {
+            diagnose("awaitCallReady", value, timeout)
+            if (current(value.key)) calls.end("Android call setup timed out.")
+            throw timeout
+        }
+    }
     internal suspend fun ensure(key: PlatformCall) {
-        entry?.takeIf { it.key == key }?.let { it.ready.await(); return }
+        entry?.takeIf { it.key == key }?.let { awaitReady(it); return }
         check(entry == null && calls.matches(key))
-        val value = Entry(key, UUID.randomUUID().toString()); entry = value
+        val value = Entry(key, UUID.randomUUID().toString(), calls.state.value.outgoing); entry = value
         val previous = closing
-        value.job = scope.launch {
+        value.job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 previous?.join()
-                if (!registered) { withContext(Dispatchers.IO) { manager.registerAppWithTelecom(CallsManager.CAPABILITY_BASELINE) }; registered = true }
+                value.operation = "registerAppWithTelecom"
+                register()
                 if (!current(key)) return@launch
                 val initial = calls.state.value
                 val attributes = CallAttributesCompat(displayName = initial.name.ifBlank { "Telegram caller" },
-                    address = Uri.parse("default-call:${key.id}"),
+                    address = Uri.parse("default-call:user/${initial.user}"),
                     direction = if (initial.outgoing) CallAttributesCompat.DIRECTION_OUTGOING else CallAttributesCompat.DIRECTION_INCOMING,
                     callType = CallAttributesCompat.CALL_TYPE_AUDIO_CALL, callCapabilities = 0)
+                value.operation = "addCall"
+                diagnose(value.operation, value)
                 manager.addCall(attributes,
                     onAnswer = { withContext(Dispatchers.Main.immediate) { if (current(key)) calls.answerFromTelecom(key) } },
                     onDisconnect = { withContext(Dispatchers.Main.immediate) { if (current(key)) calls.end() } },
@@ -96,8 +137,12 @@ class TelegramCallPlatform @Inject constructor(@ApplicationContext private val c
                     value.control = this
                     if (!current(key)) { launch { disconnect(DisconnectCause(DisconnectCause.LOCAL)) }; return@addCall }
                     callDiagnostic(context, CallEvent.TelecomRegistered)
-                    post(value, calls.state.value)
-                    value.ready.complete(Unit)
+                    diagnose("addCall.scopeReady", value)
+                    // Ongoing CallStyle cannot be posted with notify() before a foreground
+                    // service exists. Let Android promote the real phoneCall service first.
+                    value.operation = "startForegroundService"
+                    ContextCompat.startForegroundService(context, Intent(context, VoiceCallService::class.java)
+                        .putExtra("attempt", key.attempt))
                     launch { currentCallEndpoint.collect { endpoint -> if (current(key)) calls.telecomEndpoint(endpoint.type) } }
                     launch { availableEndpoints.collect { value.endpoints = it } }
                     launch { isMuted.collect { if (current(key)) calls.systemMute(it) } }
@@ -108,34 +153,54 @@ class TelegramCallPlatform @Inject constructor(@ApplicationContext private val c
                             post(value, state)
                             if (state.phase == VoiceCallPhase.Active && !established) {
                                 established = true
-                                if (initial.outgoing && setActive() is CallControlResult.Error) calls.end("Android could not activate this call.")
+                                if (initial.outgoing) {
+                                    when (val result = setActive()) {
+                                        is CallControlResult.Error -> { diagnose("setActive", value, code = result.errorCode); calls.end("Android could not activate this call.") }
+                                        is CallControlResult.Success -> diagnose("setActive.complete", value)
+                                    }
+                                }
                             }
                         }
                     }
                 }
-            } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) {
+            } catch (cancelled: CancellationException) {
+                diagnose(value.operation, value, cancelled, cancelled = true)
+                throw cancelled
+            } catch (error: Exception) {
+                diagnose(value.operation, value, error)
                 callDiagnostic(context, CallEvent.PlatformFailure)
-                if (current(key)) calls.end("Android could not register this call.")
+                if (!value.ready.isCompleted) value.ready.completeExceptionally(error)
+                if (current(key)) calls.end(if (value.control == null) "Android could not register this call." else "Android could not maintain the call notification.")
             } finally {
                 if (!value.ready.isCompleted) value.ready.completeExceptionally(IllegalStateException("Call registration unavailable"))
-                if (entry === value && calls.matches(key)) calls.end("Android call session ended.")
+                if (entry === value) {
+                    if (calls.matches(key)) calls.end("Android call session ended.")
+                    if (entry === value) close()
+                }
             }
         }
-        value.ready.await()
+        value.job!!.start()
+        awaitReady(value)
     }
     internal suspend fun answer(key: PlatformCall): Boolean {
         ensure(key)
         val value = entry?.takeIf { it.key == key } ?: return false
-        return value.control?.answer(CallAttributesCompat.CALL_TYPE_AUDIO_CALL) is CallControlResult.Success
+        return when (val result = value.control?.answer(CallAttributesCompat.CALL_TYPE_AUDIO_CALL)) {
+            is CallControlResult.Success -> true
+            is CallControlResult.Error -> { diagnose("answer", value, code = result.errorCode); false }
+            else -> false
+        }
     }
     internal fun route(type: Int) {
         val value = entry ?: return
         val endpoint = value.endpoints.firstOrNull { it.type == type } ?: return
         scope.launch {
-            try { if (current(value.key)) value.control?.requestEndpointChange(endpoint) }
+            try { if (current(value.key)) {
+                val result = value.control?.requestEndpointChange(endpoint)
+                if (result is CallControlResult.Error) diagnose("requestEndpointChange", value, code = result.errorCode)
+            } }
             catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { callDiagnostic(context, CallEvent.PlatformFailure) }
+            catch (error: Exception) { diagnose("requestEndpointChange", value, error) }
         }
     }
     internal fun close(cause: Int = DisconnectCause.LOCAL) {
@@ -143,9 +208,13 @@ class TelegramCallPlatform @Inject constructor(@ApplicationContext private val c
         old.ready.cancel(); old.avatarJob?.cancel()
         try { system.cancel(ID) } catch (_: Exception) { callDiagnostic(context, CallEvent.PlatformFailure) }
         closing = scope.launch {
-            try { withTimeoutOrNull(3_000) { old.control?.disconnect(DisconnectCause(cause)) } }
+            try {
+                val result = withTimeoutOrNull(3_000) { old.control?.disconnect(DisconnectCause(cause)) }
+                if (result is CallControlResult.Error) diagnose("disconnect", old, code = result.errorCode)
+                else diagnose("disconnect.complete", old)
+            }
             catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { callDiagnostic(context, CallEvent.PlatformFailure) }
+            catch (error: Exception) { diagnose("disconnect", old, error) }
             finally { withContext(NonCancellable) { old.job?.cancelAndJoin() } }
         }
     }
@@ -181,13 +250,33 @@ class TelegramCallPlatform @Inject constructor(@ApplicationContext private val c
         if (ringing && (Build.VERSION.SDK_INT < 34 || system.canUseFullScreenIntent())) builder.setFullScreenIntent(open, true)
         return builder.build().apply { if (ringing) flags = flags or Notification.FLAG_INSISTENT }
     }
+    internal fun foregroundStarted(attempt: Long) {
+        val value = entry?.takeIf { it.key.attempt == attempt && current(it.key) } ?: return
+        value.foreground = true
+        value.ringing = calls.state.value.phase == VoiceCallPhase.Incoming
+        if (value.ringing) callDiagnostic(context, CallEvent.IncomingPosted)
+        value.operation = "callScope"
+        diagnose("startForeground.complete", value)
+        value.ready.complete(Unit)
+    }
+    internal fun foregroundFailed(attempt: Long, error: Throwable) {
+        val value = entry?.takeIf { it.key.attempt == attempt && current(it.key) } ?: return
+        diagnose("startForeground", value, error)
+        value.ready.completeExceptionally(error)
+        calls.end("Android could not start the call service.")
+    }
     private fun post(value: Entry, state: VoiceCallState) {
-        if (!current(value.key)) return
-        if (value.ringing && state.phase != VoiceCallPhase.Incoming) system.cancel(ID)
+        if (!current(value.key) || !value.foreground) return
+        // Never cancel the foreground notification while changing incoming/ongoing style.
         val newlyRinging = !value.ringing && state.phase == VoiceCallPhase.Incoming
         value.ringing = state.phase == VoiceCallPhase.Incoming
-        system.notify(ID, notification(value, state))
-        if (newlyRinging) callDiagnostic(context, CallEvent.IncomingPosted)
+        try {
+            system.notify(ID, notification(value, state))
+            if (newlyRinging) callDiagnostic(context, CallEvent.IncomingPosted)
+        } catch (error: Exception) {
+            diagnose("updateCallNotification", value, error)
+            if (current(value.key)) calls.end("Android could not maintain the call notification.")
+        }
     }
     internal fun foregroundNotification(): Notification? = entry?.takeIf { current(it.key) }?.let { notification(it, calls.state.value) }
     internal fun refreshIdentity(key: PlatformCall) {

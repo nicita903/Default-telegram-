@@ -10,7 +10,7 @@ import com.vector.messenger.MainActivity
 import dagger.hilt.android.AndroidEntryPoint
 import javax.inject.Inject
 
-/** Exists only for a user-started/answered call; never captures or polls on its own. */
+/** Exists only for an accepted Telecom session; ringing never captures microphone audio. */
 @AndroidEntryPoint
 class VoiceCallService : Service() {
     @Inject lateinit var calls: TelegramVoiceCalls
@@ -28,10 +28,15 @@ class VoiceCallService : Service() {
         val token = intent?.getLongExtra("attempt", -1L) ?: -1L
         if (token < 0 || !calls.ownsServiceAttempt(token)) { stopSelf(startId); return START_NOT_STICKY }
         attempt = token
-        val notice = calls.platform.foregroundNotification()
-        if (notice == null) { stopSelf(startId); return START_NOT_STICKY }
-        try { ServiceCompat.startForeground(this, TelegramCallPlatform.ID, notice, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL) }
-        catch (_: RuntimeException) { calls.serviceStopped(attempt); stopSelf(startId) }
+        try {
+            val notice = calls.platform.foregroundNotification()
+            if (notice == null) { stopSelf(startId); return START_NOT_STICKY }
+            ServiceCompat.startForeground(this, TelegramCallPlatform.ID, notice, ServiceInfo.FOREGROUND_SERVICE_TYPE_PHONE_CALL)
+            calls.platform.foregroundStarted(attempt)
+        } catch (error: RuntimeException) {
+            calls.platform.foregroundFailed(attempt, error)
+            stopSelf(startId)
+        }
         return START_NOT_STICKY
     }
     override fun onTaskRemoved(rootIntent: Intent?) { calls.end(); super.onTaskRemoved(rootIntent) }

@@ -430,7 +430,7 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
         checkPermission(); check(!audioOwned)
         player.stop(); audioOwned = true
         // Core-Telecom owns audio focus, communication mode and endpoint routing.
-        ContextCompat.startForegroundService(context, Intent(context, VoiceCallService::class.java).putExtra("attempt", attempt))
+        // The platform has already promoted the phoneCall service before ensure() completes.
         networkJob = scope.launch {
             try { telegramNetworkChanges(context).collect { callDiagnostic(context, CallEvent.NetworkChanged) } }
             catch (cancelled: CancellationException) { throw cancelled }
