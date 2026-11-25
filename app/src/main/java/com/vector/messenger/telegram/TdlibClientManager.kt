@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.Build
 import android.util.Base64
 import com.vector.core.auth.*
+import com.vector.core.messaging.SessionEvent
 import com.vector.core.profile.*
 import java.io.File
 import java.util.Locale
@@ -32,17 +33,17 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
     private val ids = AtomicLong()
     private class Pending(val result: CompletableDeferred<JSONObject>, val type: String, val epoch: Long, val profileRevision: Long)
     private val pending = ConcurrentHashMap<Long, Pending>()
-    private val profileEvents = MutableSharedFlow<ProfileUpdate>(extraBufferCapacity = 64)
+    private val profileEvents = OrderedUpdateRelay<ProfileUpdate>(scope, context, { sessionEpoch }, { authorized })
     override val profileUpdates = profileEvents.asSharedFlow()
     private val connectionState = MutableStateFlow(ProfileConnection.Connecting)
     override val connection = connectionState.asStateFlow()
-    private val ghostEvents = MutableSharedFlow<JSONObject>(extraBufferCapacity = 64)
+    private val ghostEvents = OrderedUpdateRelay<JSONObject>(scope, context, { sessionEpoch }, { authorized })
     internal val ghostUpdates = ghostEvents.asSharedFlow()
-    private val mediaEvents = MutableSharedFlow<JSONObject>(extraBufferCapacity = 64)
+    private val mediaEvents = OrderedUpdateRelay<JSONObject>(scope, context, { sessionEpoch }, { authorized })
     internal val mediaUpdates = mediaEvents.asSharedFlow()
     private val avatarTypes = setOf("updateUser", "updateChatPhoto", "updateFile", "updateUserFullInfo")
     private class AvatarEnvelope(val epoch: Long, val value: JSONObject)
-    private val avatarEvents = MutableSharedFlow<AvatarEnvelope>(extraBufferCapacity = 64)
+    private val avatarEvents = OrderedUpdateRelay<AvatarEnvelope>(scope, context, { sessionEpoch }, { authorized })
     internal val avatarUpdates = avatarEvents.asSharedFlow()
         .filter { it.epoch == sessionEpoch && authorized }.map { it.value }
     private val callTypes = setOf("updateCall", "updateNewCallSignalingData")
@@ -50,13 +51,13 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
     private val restoringCallUpdates = ArrayDeque<JSONObject>()
     internal val callUpdates = callEvents.receiveAsFlow().filter { it.epoch == sessionEpoch && authorized }.map { it.value }
     private val contactLibraryTypes = setOf("updateNewMessage", "updateDeleteMessages", "updateMessageContent", "updateUser", "updateUserFullInfo", "updateChatNotificationSettings")
-    private val contactLibraryEvents = MutableSharedFlow<AvatarEnvelope>(extraBufferCapacity = 64)
+    private val contactLibraryEvents = OrderedUpdateRelay<AvatarEnvelope>(scope, context, { sessionEpoch }, { authorized })
     internal val contactLibraryUpdates = contactLibraryEvents.asSharedFlow().filter { it.epoch == sessionEpoch && authorized }.map { it.value }
     private val storyTypes = setOf("updateStory", "updateStoryDeleted", "updateStoryPostSucceeded", "updateStoryPostFailed", "updateChatActiveStories", "updateFile")
-    private val storyEvents = MutableSharedFlow<AvatarEnvelope>(extraBufferCapacity = 64)
+    private val storyEvents = OrderedUpdateRelay<AvatarEnvelope>(scope, context, { sessionEpoch }, { authorized })
     internal val storyUpdates = storyEvents.asSharedFlow().filter { it.epoch == sessionEpoch && authorized }.map { it.value }
     private val activityTypes = setOf("updateUserStatus", "updateUser", "updateChatAction", "updateNewMessage")
-    private val activityEvents = MutableSharedFlow<AvatarEnvelope>(extraBufferCapacity = 128)
+    private val activityEvents = OrderedUpdateRelay<AvatarEnvelope>(scope, context, { sessionEpoch }, { authorized })
     internal val activityUpdates = activityEvents.asSharedFlow().filter { it.epoch == sessionEpoch && authorized }.map { it.value }
     private val notificationTypes = setOf("updateChatReadInbox", "updateUser", "updateNotificationGroup", "updateNotification", "updateActiveNotifications", "updateHavePendingNotifications", "updateFile", "updateChatPhoto", "updateChatNotificationSettings", "updateScopeNotificationSettings", "updateMessageSendSucceeded", "updateMessageSendFailed")
     private val pushNotificationTypes = setOf("updateActiveNotifications", "updateNotificationGroup", "updateNotification", "updateHavePendingNotifications")
@@ -129,6 +130,7 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                 JsonClient.execute(request("setLogStream", "log_stream" to request("logStreamEmpty")).toString())
                 JsonClient.execute(request("setLogVerbosityLevel", "new_verbosity_level" to 0).toString())
                 clientId = JsonClient.createClientId()
+                SessionDiagnostics.mark(context, SessionEvent.ClientCreated)
             } catch (_: LinkageError) {
                 events.send(AuthStep.SetupRequired("The official TDLib native library is unavailable for this device. Build/import the verified Android library described in docs/TDLIB_AUTH.md.")); return@withLock
             }
@@ -164,6 +166,12 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                             "updateConnectionState" -> {
                                 val next = mapProfileConnection(json.optJSONObject("state") ?: JSONObject())
                                 if (next != connectionState.value) com.vector.messenger.notifications.PushDiagnostics.event("TDLib connection=${next.name}")
+                                if (next != connectionState.value) SessionDiagnostics.mark(context, when (next) {
+                                    ProfileConnection.Ready -> SessionEvent.ConnectionReady
+                                    ProfileConnection.Updating -> SessionEvent.ConnectionUpdating
+                                    ProfileConnection.Connecting -> SessionEvent.ConnectionConnecting
+                                    else -> SessionEvent.ConnectionWaiting
+                                })
                                 connectionState.value = next
                             }
                         }
@@ -194,12 +202,14 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                             "authorizationStateLoggingOut" -> { logoutConfirmed = true; events.send(AuthStep.LoggingOut) }
                             "authorizationStateReady" -> {
                                 logoutConfirmed = false
+                                SessionDiagnostics.mark(context, SessionEvent.AuthorizationReady)
                                 while (restoringCallUpdates.isNotEmpty()) callEvents.send(AvatarEnvelope(sessionEpoch, restoringCallUpdates.removeFirst()))
                                 events.send(AuthStep.Ready)
                             }
                             "authorizationStateWaitTdlibParameters" -> scope.launch(Dispatchers.IO) { initialize(configuration) }
                             "authorizationStateClosed" -> {
                                 lifecycle.withLock {
+                                    SessionDiagnostics.mark(context, SessionEvent.ClientClosed)
                                     clientId = 0
                                     networkMonitor?.cancel(); networkMonitor = null
                                     pending.values.forEach { it.result.cancel() }; pending.clear()
@@ -215,6 +225,7 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                     }
                 } catch (cancelled: CancellationException) { throw cancelled }
                 catch (_: Exception) { events.send(AuthStep.SetupRequired("Telegram stopped unexpectedly. Restart the application; existing session data has been preserved.")) }
+                finally { SessionDiagnostics.mark(context, SessionEvent.ReceiverStopped) }
             }
             // The first asynchronous request starts TDLib update delivery; auth updates remain the source of truth.
             JsonClient.send(id, request("getAuthorizationState").toString())
@@ -252,6 +263,7 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
             try {
                 telegramNetworkChanges(context).collect { hint ->
                     if (clientId != client) return@collect
+                    SessionDiagnostics.mark(context, SessionEvent.NetworkChanged)
                     try {
                         val result = send(request("setNetworkType", "type" to request(hint.type)))
                         if (result.optString("@type") == "error") android.util.Log.w("DefaultConnectivity", "TDLib rejected a network hint")

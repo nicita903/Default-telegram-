@@ -10,6 +10,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
@@ -66,6 +67,7 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
     val entry by nav.currentBackStackEntryAsState()
     val route = entry?.destination?.route
     val conversation = route == Routes.Conversation
+    val settingsSearching = displayedModule == AppModule.Settings && route == SettingsRoutes.Search
     var searchOpen by rememberSaveable { mutableStateOf(false) }
     var searchScopeName by rememberSaveable { mutableStateOf(SearchScope.Chats.name) }
     val searchScope = SearchScope.valueOf(searchScopeName)
@@ -91,6 +93,7 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
     }
     val gestureConfig = VectorGestureConfig(distance = appearance.distance.dp, holdMillis = appearance.hold.toLong())
     val allChats by chats.chats.collectAsStateWithLifecycle()
+    com.vector.messenger.telegram.SessionUiTimeline(allChats.isNotEmpty() && displayedModule == AppModule.Chats && !conversation)
     val chatStatus by chats.status.collectAsStateWithLifecycle()
     var contactProfileChat by rememberSaveable(chatStatus.session) { mutableStateOf<Long?>(null) }
     val contact = allChats.find { it.id == entry?.arguments?.getLong("chatId") }
@@ -145,7 +148,7 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
     val modulePolicy: () -> GestureCancelReason = {
         moduleGestureEligibility(
             enabled = preferences.appearance.value.modules,
-            searchActive = searchOwnsInput || (searchOpen && (transientChats || navigation.module == AppModule.Chats) &&
+            searchActive = settingsSearching || searchOwnsInput || (searchOpen && (transientChats || navigation.module == AppModule.Chats) &&
                 controllers.getValue(AppModule.Chats).currentBackStackEntry?.destination?.route != Routes.Conversation),
             modalOpen = menu || newMessage || floatingInterface,
             touchExploration = touchExploration,
@@ -175,7 +178,7 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
     CompositionLocalProvider(LocalGestureExclusions provides exclusions) {
         Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)
             .vectorModuleGestures(gesture, modulePolicy, release, config = gestureConfig, haptics = appearance.haptics,
-                enabled = !searchOwnsInput, scopeKey = gestureScope, contentEnabled = !conversation)) {
+                enabled = !searchOwnsInput && !settingsSearching, scopeKey = gestureScope, contentEnabled = !conversation)) {
             Scaffold(
                 modifier = Modifier
                     // The menu is in-window, so its backdrop is this very content: blur it while
@@ -201,7 +204,10 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                             else if (profileOpen && route == Routes.NewPost) "NEW POST"
                             else if (profileOpen && route == Routes.Post) "POST"
                             else if (profileOpen) "PROFILE"
-                            else if (conversation) contact?.title ?: "Conversation" else if (displayedModule == AppModule.Chats) "DEFAULT" else displayedModule.label,
+                            else if (conversation) contact?.title ?: "Conversation"
+                            else if (displayedModule == AppModule.Settings && route == SettingsRoutes.Search) "Search settings"
+                            else if (displayedModule == AppModule.Settings && route == SettingsRoutes.Category) SettingsRoutes.title(entry?.arguments?.getString("section").orEmpty())
+                            else if (displayedModule == AppModule.Chats) "DEFAULT" else displayedModule.label,
                         subtitle = if (profileOpen) "" else if (conversation) { if (chatStatus.live) "Telegram" else "Sample conversation" }
                             else if (searchVisible) "Search workspace" else if (displayedModule == AppModule.Chats) {
                                 if (!chatStatus.live) "Demo chats · not synchronized" else when (chatStatus.connection) {
@@ -243,6 +249,9 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                                     contact.userId?.takeIf { it > 0 }?.let { com.vector.messenger.calling.VoiceCallButton(it) }
                                 com.vector.messenger.feature.ConversationOptions(contact, chats)
                             }
+                            else if (displayedModule == AppModule.Settings && !settingsSearching) DefaultIconControl(Icons.Default.Search, "Search settings", {
+                                nav.navigate(SettingsRoutes.Search) { launchSingleTop = true }
+                            }, Modifier.excludeModuleGestures(), quiet = true)
                             else if (internalBack && !conversation) DefaultIconControl(Icons.Default.Menu, "Open navigation", { menu = true },
                                 Modifier.excludeModuleGestures(), quiet = true)
                             else if (!conversation && displayedModule == AppModule.Chats) DefaultIconControl(Icons.Default.Add, "New chat", { newMessage = true },
@@ -274,7 +283,8 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                                 Box(Modifier.fillMaxSize().then(if (module == AppModule.Chats && searchOwnsInput) Modifier.clearAndSetSemantics {} else Modifier)) {
                                     if (destination.first) ProfileNavigationHost(profileNav)
                                     else VectorNavigationHost(module, controllers.getValue(module), chats, preferences,
-                                        onPrivacy = { transientChats = false; navigation.select(AppModule.Privacy) }, onSearch = { searchScopeName = SearchScope.Chats.name; searchOpen = true })
+                                        onPrivacy = { transientChats = false; navigation.select(AppModule.Privacy) },
+                                        onDownloads = { transientChats = false; navigation.select(AppModule.Downloads) }, onProfile = ::openProfile, onSearch = { searchScopeName = SearchScope.Chats.name; searchOpen = true })
                                 }
                                 if (!destination.first && module == AppModule.Chats) SearchOverlay(searchVisibility, searchVisible && !menu && !floatingInterface && !touchExploration,
                                     search, searchScope, blockedAttempt, ::switchSearch, ::closeSearch) { id ->
@@ -334,6 +344,8 @@ private fun VectorNavigationHost(
     chats: ChatsViewModel,
     preferences: PreferencesViewModel,
     onPrivacy: () -> Unit,
+    onDownloads: () -> Unit,
+    onProfile: () -> Unit,
     onSearch: () -> Unit,
 ) {
     val appearance = LocalAppearance.current
@@ -360,7 +372,14 @@ private fun VectorNavigationHost(
             }
             AppModule.Downloads -> composable(module.name) { DownloadsScreen() }
             AppModule.Privacy -> composable(module.name) { PrivacyScreen(allChats.filter { it.isContact }, preferences) }
-            AppModule.Settings -> composable(module.name) { SettingsScreen(preferences, onPrivacy) }
+            AppModule.Settings -> {
+                composable(module.name) { SettingsScreen(preferences, onPrivacy, onDownloads, { nav.navigate(it) { launchSingleTop = true } }, onProfile) }
+                composable(SettingsRoutes.Search) { SettingsScreen(preferences, onPrivacy, onDownloads, { nav.navigate(it) { launchSingleTop = true } }, onProfile, page = "search") }
+                composable(SettingsRoutes.Category, arguments = listOf(navArgument("section") { type = NavType.StringType }, navArgument("focus") { type = NavType.StringType; defaultValue = "" })) { settingsEntry ->
+                    SettingsScreen(preferences, onPrivacy, onDownloads, { nav.navigate(it) { launchSingleTop = true } }, onProfile,
+                        page = settingsEntry.arguments?.getString("section").orEmpty(), focus = settingsEntry.arguments?.getString("focus").orEmpty())
+                }
+            }
 
         }
     }

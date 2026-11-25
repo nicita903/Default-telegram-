@@ -31,6 +31,9 @@ class TdlibMessagingClient(private val manager: TdlibClientManager, private val 
         }
         return true
     }
+    override suspend fun localHistory(chatId: Long, fromId: Long, limit: Int) =
+        call(request("getChatHistory", "chat_id" to chatId, "from_message_id" to fromId, "offset" to 0,
+            "limit" to limit.coerceIn(1, 100), "only_local" to true)).optJSONArray("messages")?.objects()?.map(::mapTelegramMessage).orEmpty()
     override suspend fun history(chatId: Long, fromId: Long, limit: Int) =
         call(request("getChatHistory", "chat_id" to chatId, "from_message_id" to fromId, "offset" to 0,
             "limit" to limit.coerceIn(1, 100), "only_local" to false)).optJSONArray("messages")?.objects()?.map(::mapTelegramMessage).orEmpty()

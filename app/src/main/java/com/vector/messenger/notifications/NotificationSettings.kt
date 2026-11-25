@@ -18,6 +18,10 @@ import androidx.compose.material3.*
 import com.vector.messenger.feature.PreferencesViewModel
 import com.vector.messenger.feature.PreferenceToggle
 import com.vector.messenger.design.DefaultAction
+import com.vector.messenger.design.DefaultDialog
+import com.vector.messenger.design.VectorIcons
+import com.vector.messenger.feature.CompactSettingsRow
+import com.vector.messenger.feature.SettingsHeading
 
 @Composable
 fun NotificationSettings(viewModel: PreferencesViewModel) {
@@ -25,22 +29,31 @@ fun NotificationSettings(viewModel: PreferencesViewModel) {
     val value by viewModel.notifications.collectAsStateWithLifecycle()
     var permitted by remember { mutableStateOf(NotificationManagerCompat.from(context).areNotificationsEnabled()) }
     var rationale by remember { mutableStateOf(false) }
+    var systemError by remember { mutableStateOf<String?>(null) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
         permitted = NotificationManagerCompat.from(context).areNotificationsEnabled()
     }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { permitted = NotificationManagerCompat.from(context).areNotificationsEnabled() }
-    Text("Notifications", style = MaterialTheme.typography.titleMedium)
+    SettingsHeading("Delivery preferences")
     PreferenceToggle("Enable notifications", value.enabled) { enabled ->
         viewModel.notificationPreference { it.copy(enabled = enabled) }
         if (enabled && Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED && !viewModel.notificationPermissionAsked) rationale = true
     }
     PreferenceToggle("Hide message content and identity", value.hideContent) { hide -> viewModel.notificationPreference { it.copy(hideContent = hide) } }
     PreferenceToggle("Group notifications", value.groups) { groups -> viewModel.notificationPreference { it.copy(groups = groups) } }
-    if (!permitted && Build.VERSION.SDK_INT >= 33 && !viewModel.notificationPermissionAsked) DefaultAction("Allow notifications", { rationale = true })
+    if (!permitted && Build.VERSION.SDK_INT >= 33 && !viewModel.notificationPermissionAsked) CompactSettingsRow("Allow notifications", icon = VectorIcons.Check) { rationale = true }
     Text(if (permitted) "Sounds, vibration and lock-screen visibility are managed by Android." else "Android notifications are off. Messaging continues normally.", style = MaterialTheme.typography.bodySmall)
-    DefaultAction("Android notification settings", { context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)) })
-    if (rationale) AlertDialog(onDismissRequest = { rationale = false; viewModel.notificationPermissionAsked = true },
-        title = { Text("Allow message notifications?") }, text = { Text("Default uses notifications for incoming messages and direct replies. You can hide previews or change access in Android settings.") },
-        confirmButton = { TextButton(onClick = { rationale = false; viewModel.notificationPermissionAsked = true; if (Build.VERSION.SDK_INT >= 33) launcher.launch(Manifest.permission.POST_NOTIFICATIONS) }) { Text("Continue") } },
-        dismissButton = { TextButton(onClick = { rationale = false; viewModel.notificationPermissionAsked = true }) { Text("Not now") } })
+    CompactSettingsRow("Android notification settings", if (permitted) "Allowed" else "Off", VectorIcons.Views) {
+        try { context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)) }
+        catch (_: Exception) { systemError = "Android notification settings are unavailable in this profile." }
+    }
+    systemError?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+    if (rationale) DefaultDialog("Allow message notifications?", { rationale = false; viewModel.notificationPermissionAsked = true }) {
+        Text("Default uses notifications for incoming messages and direct replies. You can hide previews or change access in Android settings.", style = MaterialTheme.typography.bodyMedium)
+        CompactSettingsRow("Continue", icon = VectorIcons.Check, chevron = false) {
+            rationale = false; viewModel.notificationPermissionAsked = true
+            if (Build.VERSION.SDK_INT >= 33) launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        CompactSettingsRow("Not now", icon = VectorIcons.Minus, chevron = false) { rationale = false; viewModel.notificationPermissionAsked = true }
+    }
 }

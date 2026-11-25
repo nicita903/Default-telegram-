@@ -10,6 +10,8 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import androidx.core.content.edit
 
+enum class InterfaceStyle { Console, AuroraGlass }
+
 /** Non-sensitive UI preferences only. Never stores account information or search queries. */
 data class AppearanceSettings(
     val modules: Boolean = true, val distance: Int = 28, val hold: Int = 180,
@@ -20,6 +22,7 @@ data class AppearanceSettings(
     val compact: Boolean = true, val accent: Int = 0, val intensity: Int = 100,
     val reducedMotion: Boolean = false, val typeScale: Int = 100,
     val amoledBlack: Boolean = false, val glassBlur: Int = 2,
+    val interfaceStyle: InterfaceStyle = InterfaceStyle.AuroraGlass,
 )
 
 /** Shared bounds for loading and live updates: malformed configuration cannot disable navigation. */
@@ -45,6 +48,7 @@ interface AppearancePreferences {
 class AppearanceStore @Inject constructor(@ApplicationContext context: Context) : AppearancePreferences {
     private val prefs = context.getSharedPreferences("appearance_v2", Context.MODE_PRIVATE)
     private val mutable = MutableStateFlow(AppearanceSettings(
+        interfaceStyle = runCatching { InterfaceStyle.valueOf(prefs.getString("interfaceStyle", "AuroraGlass") ?: "AuroraGlass") }.getOrDefault(InterfaceStyle.AuroraGlass),
         modules = prefs.getBoolean("modules", true), distance = prefs.getInt("distance", 28),
         hold = prefs.getInt("hold", 180), haptics = prefs.getBoolean("haptics", true),
         zoom = prefs.getInt("zoom", 5), speed = prefs.getInt("speed", 100),
@@ -63,7 +67,7 @@ class AppearanceStore @Inject constructor(@ApplicationContext context: Context) 
         val next = change(mutable.value).normalized()
         if (next == mutable.value) return
         mutable.value = next
-        prefs.edit { putBoolean("modules", next.modules).putInt("distance", next.distance).putInt("hold", next.hold)
+        prefs.edit { putString("interfaceStyle", next.interfaceStyle.name).putBoolean("modules", next.modules).putInt("distance", next.distance).putInt("hold", next.hold)
             .putBoolean("haptics", next.haptics).putInt("zoom", next.zoom).putInt("speed", next.speed)
             .putBoolean("pullSearch", next.pullSearch).putInt("pullDistance", next.pullDistance).putBoolean("dismissSearch", next.dismissSearch)
             .putBoolean("fastSearch", next.fastSearch).putInt("sensitivity", next.sensitivity)

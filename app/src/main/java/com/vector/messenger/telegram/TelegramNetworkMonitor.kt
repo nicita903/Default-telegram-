@@ -13,37 +13,45 @@ internal data class TelegramNetworkHint(val network: Long?, val type: String, va
 
 internal fun telegramNetworkChanges(context: Context): Flow<TelegramNetworkHint> = callbackFlow {
     val manager = context.getSystemService(ConnectivityManager::class.java)
-    val blockedNetworks = mutableSetOf<Network>()
-    fun publish(lost: Network? = null) {
-        val network = manager.activeNetwork?.takeUnless { it == lost }
-        val capabilities = network?.let(manager::getNetworkCapabilities)
-        val internet = network !in blockedNetworks && capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) == true
+    val guard = Any()
+    // Seed before registration; never overwrite a newer callback with a startup snapshot.
+    var current = manager.activeNetwork
+    var capabilities = current?.let(manager::getNetworkCapabilities)
+    var blocked = false
+    fun publish() {
+        val caps = capabilities
         val type = when {
-            !internet -> "networkTypeNone"
-            capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true -> "networkTypeOther"
-            capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true -> "networkTypeWiFi"
-            capabilities?.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) == true -> "networkTypeMobile"
+            current == null || blocked -> "networkTypeNone"
+            caps == null -> "networkTypeOther" // Unknown capabilities are not evidence of no network.
+            !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET) -> "networkTypeNone"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN) -> "networkTypeOther"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "networkTypeWiFi"
+            caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "networkTypeMobile"
             else -> "networkTypeOther"
         }
-        // An unvalidated network can still reach Telegram (for example through a proxy).
-        // Do not synthesize Ready or block TDLib's own connectivity checks on validation.
-        trySend(TelegramNetworkHint(network?.networkHandle, type,
-            capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true))
+        trySend(TelegramNetworkHint(current?.networkHandle, type, caps?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED) == true))
     }
+    publish()
     val callback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) { publish() }
-        override fun onCapabilitiesChanged(network: Network, capabilities: NetworkCapabilities) {
-            if (network == manager.activeNetwork) publish()
+        override fun onAvailable(network: Network) = synchronized(guard) {
+            if (current != network) { current = network; capabilities = null; blocked = false }
+            // Android guarantees a capability callback next. Do not query synchronous snapshots here
+            // or synthesize None between the old and new default network.
         }
-        override fun onLost(network: Network) { blockedNetworks.remove(network); publish(lost = network) }
-        override fun onBlockedStatusChanged(network: Network, blocked: Boolean) {
-            if (blocked) blockedNetworks.add(network) else blockedNetworks.remove(network)
-            if (network == manager.activeNetwork) publish()
+        override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) = synchronized(guard) {
+            if (network == current) { capabilities = caps; publish() }
+        }
+        override fun onLost(network: Network) = synchronized(guard) {
+            // Losing the OLD default during a handover must not disconnect the NEW one.
+            if (network == current) { current = null; capabilities = null; blocked = false; publish() }
+        }
+        override fun onBlockedStatusChanged(network: Network, value: Boolean) = synchronized(guard) {
+            if (network == current) { blocked = value; if (capabilities != null || blocked) publish() }
         }
     }
     manager.registerDefaultNetworkCallback(callback)
-    try { publish(); awaitClose() }
-    finally { manager.unregisterNetworkCallback(callback) }
+    awaitClose { manager.unregisterNetworkCallback(callback) }
 }.buffer(Channel.CONFLATED).distinctUntilChanged { previous, current ->
+    // Validation may be absent on a VPN/proxy network that still reaches Telegram.
     previous.network == current.network && previous.type == current.type
 }

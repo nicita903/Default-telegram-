@@ -34,6 +34,7 @@ interface TelegramMessagingClient {
     val updates: Flow<ChatUpdate>
     val connection: StateFlow<ProfileConnection>
     suspend fun loadChats(archived: Boolean, limit: Int): Boolean
+    suspend fun localHistory(chatId: Long, fromId: Long, limit: Int): List<Message> = emptyList()
     suspend fun history(chatId: Long, fromId: Long, limit: Int): List<Message>
     suspend fun sendText(chatId: Long, text: String, replyTo: Long?): Message
     suspend fun editText(chatId: Long, messageId: Long, text: String): Message = throw MessagingException(MessagingFailure.Unavailable)

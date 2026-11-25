@@ -21,9 +21,10 @@ object RepositoryModule {
         scope: kotlinx.coroutines.CoroutineScope) = com.vector.core.media.MediaRepository(authentication,
         com.vector.messenger.telegram.TdlibFileClient(client, context), scope)
     @Provides fun appearance(store: com.vector.messenger.feature.AppearanceStore): com.vector.messenger.feature.AppearancePreferences = store
-    @Provides @Singleton fun chats(authentication: com.vector.core.auth.AuthenticationRepository,
+    @Provides @Singleton fun chats(@dagger.hilt.android.qualifiers.ApplicationContext context: android.content.Context,
+        authentication: com.vector.core.auth.AuthenticationRepository,
         client: com.vector.messenger.telegram.TdlibClientManager, scope: kotlinx.coroutines.CoroutineScope): ChatRepository =
-        com.vector.core.messaging.SessionChatRepository(authentication, com.vector.messenger.telegram.TdlibMessagingClient(client), DemoChatRepository(), scope)
+        com.vector.core.messaging.SessionChatRepository(authentication, com.vector.messenger.telegram.TdlibMessagingClient(client), DemoChatRepository(), scope) { event -> com.vector.messenger.telegram.SessionDiagnostics.mark(context, event) }
     @Provides @Singleton fun ghost(authentication: com.vector.core.auth.AuthenticationRepository,
         client: com.vector.messenger.telegram.TdlibClientManager, @dagger.hilt.android.qualifiers.ApplicationContext context: android.content.Context,
         scope: kotlinx.coroutines.CoroutineScope): GhostRepository = com.vector.core.ghost.SelectiveGhostRepository(authentication,

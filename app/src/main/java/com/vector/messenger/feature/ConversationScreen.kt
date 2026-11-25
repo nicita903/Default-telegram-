@@ -60,6 +60,7 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
     val status by viewModel.status.collectAsStateWithLifecycle()
     val history by viewModel.history.collectAsStateWithLifecycle()
     val messages = remember(allMessages, chatId) { allMessages.filter { it.chatId == chatId } }
+    com.vector.messenger.telegram.SessionUiTimeline(messages.isNotEmpty(), conversation = true)
     val newestFirst = remember(messages) { messages.asReversed() }
     val byId = remember(messages) { messages.associateBy { it.id } }
     val chat = chats.find { it.id == chatId }

@@ -20,7 +20,7 @@ import com.vector.messenger.navigation.gesture.excludeModuleGestures
 
 @Composable
 internal fun SelectiveGhostScreen(state: GhostState, enabled: (Boolean) -> Unit, select: (Long) -> Unit, remove: (Long) -> Unit,
-    policy: (Long, ContactPrivacy) -> Unit, refresh: () -> Unit, applyPrivacy: () -> Unit, keepCurrent: () -> Unit) {
+    policy: (Long, ContactPrivacy) -> Unit, refresh: () -> Unit, applyPrivacy: () -> Unit, keepCurrent: () -> Unit, focus: String = "") {
     var query by remember { mutableStateOf("") }
     val editable = state.initialized && !state.busy
     val contacts = remember(state.contacts) { state.contacts.associateBy { it.id } }
@@ -34,16 +34,20 @@ internal fun SelectiveGhostScreen(state: GhostState, enabled: (Boolean) -> Unit,
                 contact?.username?.contains(query.trim(), true) == true || id.toString().contains(query.trim())
         }
     }
-    LazyColumn(Modifier.fillMaxSize().testTag("privacy_scroll"), contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        item { com.vector.messenger.calling.CallPrivacySettings(); DefaultRule() }
+    val listState = androidx.compose.foundation.lazy.rememberLazyListState()
+    var highlighted by remember(focus) { mutableStateOf(focus) }
+    LaunchedEffect(focus) {
+        if (focus.isNotEmpty()) { listState.scrollToItem(if (focus == "online") 1 else 0); kotlinx.coroutines.delay(1200); highlighted = "" }
+    }
+    LazyColumn(Modifier.fillMaxSize().testTag("privacy_scroll"), state = listState, contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
-            Text("Ghost Mode", style = MaterialTheme.typography.headlineSmall)
+            Text("Ghost Mode", color = if (highlighted == "ghost") DefaultDesign.colors.accent else DefaultDesign.colors.text, style = MaterialTheme.typography.headlineSmall)
             PreferenceToggle("Enable local suppression", state.saved.enabled, editable, enabled)
             Text(if (!state.initialized && state.error != null) "Local filters · Failed" else if (!state.initialized || state.operation == GhostOperation.Saving) "Local filters · Applying" else if (state.saved.enabled) "Local filters · Enabled" else "Local filters · Disabled",
                 style = MaterialTheme.typography.labelSmall, color = DefaultDesign.colors.accent)
         }
         item {
-            Text("Last Seen & Online", style = MaterialTheme.typography.titleMedium)
+            Text("Last Seen & Online", color = if (highlighted == "online") DefaultDesign.colors.accent else DefaultDesign.colors.text, style = MaterialTheme.typography.titleMedium)
             Text(when {
                 state.operation == GhostOperation.Applying -> "Server exclusions · Applying"
                 state.serverError != null || state.conflict -> "Server exclusions · Failed · refresh or review required"

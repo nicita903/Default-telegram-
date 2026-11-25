@@ -10,6 +10,7 @@ class DefaultApplication : Application() {
     @javax.inject.Inject lateinit var calls: com.vector.messenger.calling.TelegramVoiceCalls
     override fun onCreate() {
         super.onCreate()
+        com.vector.messenger.telegram.SessionDiagnostics.install(this)
         // Restoration must never depend on notification channels, permission, or Firebase.
         authentication.start()
         calls.start()

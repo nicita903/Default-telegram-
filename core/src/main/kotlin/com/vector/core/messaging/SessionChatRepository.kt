@@ -9,6 +9,7 @@ import kotlinx.coroutines.flow.*
 class SessionChatRepository(
     authentication: AuthenticationRepository, private val client: TelegramMessagingClient,
     private val demo: ChatRepository, private val scope: CoroutineScope,
+    private val diagnostic: (SessionEvent) -> Unit = {},
 ) : ChatRepository {
     private val chatState = MutableStateFlow(demo.chats.value)
     private val messageState = MutableStateFlow(demo.messages.value)
@@ -63,6 +64,7 @@ class SessionChatRepository(
     private val reactionRequests = mutableSetOf<Pair<Long, Long>>()
     private val photoCancellations = mutableSetOf<Pair<Long, Long>>()
     private var active: Long? = null
+    private var retainedChat: Long? = null
     private var atLatest = true
     private var live = false
     private var epoch = 0L
@@ -70,7 +72,7 @@ class SessionChatRepository(
     init {
         scope.launch {
             authentication.state.map { it.step == AuthStep.Ready }.distinctUntilChanged().collectLatest { ready ->
-                epoch++; live = ready; active = null; atLatest = true; seenArrivals.clear(); viewportNearLatest = true; viewportScrolling = false; historyGeneration++
+                epoch++; live = ready; active = null; retainedChat = null; atLatest = true; seenArrivals.clear(); viewportNearLatest = true; viewportScrolling = false; historyGeneration++
                 records.clear(); access.clear(); window.clear(); versions.clear(); replaced.clear(); visibleReads.clear(); reactionRequests.clear(); reactionErrorState.value = null
                 orderDirty = true; ordered = emptyList()
                 sends.clear(); retries.clear(); photoCancellations.clear(); avatarRequests.clear(); listJobs.clear(); publish = null; historyJob = null
@@ -109,11 +111,13 @@ class SessionChatRepository(
                 }.sortedWith(compareByDescending<Pair<Long, ChatPosition>> { it.second.order }.thenByDescending { it.first })
                 orderDirty = false
             }
+            val wasEmpty = chatState.value.isEmpty()
             chatState.value = ordered.mapNotNull { (id, position) -> records[id]?.let {
                 val chat = projected(it)
                 if (chat.archived == position.archived && chat.pinned == position.pinned && chat.order == position.order) chat
                 else chat.copy(archived = position.archived, pinned = position.pinned, order = position.order)
             } }
+            if (wasEmpty && chatState.value.isNotEmpty()) diagnostic(SessionEvent.CachedChatsAvailable)
         }
     }
     private fun projected(record: TelegramChat): Chat {
@@ -137,7 +141,7 @@ class SessionChatRepository(
         return if (message.outgoing && message.delivery == Delivery.Sent && message.id <= read) message.copy(delivery = Delivery.Read) else message
     }
     private fun put(message: Message, event: Boolean = true) {
-        if (message.chatId != active || message.id in replaced) return
+        if (message.chatId != retainedChat || message.id in replaced) return
         // Once newer pages have been evicted, don't stitch distant live messages onto old history.
         // The explicit Latest action restores a contiguous newest window from TDLib.
         val newNewest = message.id !in window && message.id > (window.keys.maxOrNull() ?: 0)
@@ -163,7 +167,9 @@ class SessionChatRepository(
         historyState.update { it.copy(atLatest = atLatest) }
         visibleReads.retainAll(window.keys)
         if (versions.size > WINDOW * 3) versions.keys.retainAll(window.keys)
+        val wasEmpty = messageState.value.isEmpty()
         messageState.value = bounded
+        if (wasEmpty && bounded.isNotEmpty()) diagnostic(SessionEvent.CachedMessagesAvailable)
     }
     private fun reduce(update: ChatUpdate) {
         if (!live) return
@@ -179,18 +185,19 @@ class SessionChatRepository(
             is ChatUpdate.Protection -> change(update.id) { it.copy(chat = it.chat.copy(protectedContent = update.protected)) }
             is ChatUpdate.ReadOutbox -> {
                 change(update.id) { it.copy(lastReadOutbox = update.lastId) }
-                if (active == update.id) { window.replaceAll { _, message -> normalize(message) }; publishMessages() }
+                if (retainedChat == update.id) { window.replaceAll { _, message -> normalize(message) }; publishMessages() }
             }
             is ChatUpdate.Upsert -> {
                 if (update.message.outgoing) outgoingEvents.tryEmit(update.message)
-                if (active == update.message.chatId) {
-                val fresh = update.isNew && update.message.id !in seenArrivals && update.message.id !in window
+                if (retainedChat == update.message.chatId) {
+                val fresh = active == update.message.chatId && update.isNew && update.message.id !in seenArrivals && update.message.id !in window
                 val follow = viewportNearLatest && !viewportScrolling && atLatest
                 update.oldId?.takeIf { it != update.message.id }?.let { old ->
                     replaced += old; if (replaced.size > WINDOW * 3) replaced.remove(replaced.first())
                     window.remove(old)
                 }
                 put(update.message); publishMessages()
+                if (update.isNew) diagnostic(SessionEvent.FreshMessagesApplied)
                 if (update.message.delivery == Delivery.Failed) feedback(update.message, ChatFeedbackKind.Failed)
                 if (fresh) {
                     if (!update.message.outgoing && !update.message.isService && client.connection.value == com.vector.core.profile.ProfileConnection.Ready)
@@ -211,17 +218,17 @@ class SessionChatRepository(
                             else -> ""
                         }
                     })) }
-                if (active == update.chatId) {
+                if (retainedChat == update.chatId) {
                     revision++; versions[update.messageId] = revision
                     window[update.messageId]?.takeUnless { it.restricted }?.let { window[update.messageId] = it.copy(text = update.text, media = update.media) }; publishMessages()
                 }
             }
-            is ChatUpdate.Reactions -> if (active == update.chatId) {
+            is ChatUpdate.Reactions -> if (retainedChat == update.chatId) {
                 revision++; versions[update.messageId] = revision
                 window[update.messageId]?.takeUnless { it.restricted }?.let { window[update.messageId] = it.copy(reactions = update.reactions) }
                 publishMessages()
             }
-            is ChatUpdate.Deleted -> if (active == update.chatId) {
+            is ChatUpdate.Deleted -> if (retainedChat == update.chatId) {
                 update.ids.forEach { id -> revision++; versions[id] = revision; window.remove(id) }; publishMessages()
             }
             is ChatUpdate.File -> {
@@ -236,7 +243,7 @@ class SessionChatRepository(
                     window.replaceAll { _, message -> if (message.senderId == update.peerId) message.copy(senderName = update.displayName) else message }
                     publishMessages()
                 }
-                val current = active?.let(records::get)
+                val current = retainedChat?.let(records::get)
                 if (update.restricted && current?.peerId == update.peerId && current.supergroup == update.supergroup) {
                     historyJob?.cancel(); historyGeneration++; window.clear(); messageState.value = emptyList()
                     historyState.value = HistoryState(active, hasMore = false, error = "Content unavailable in this client.")
@@ -261,9 +268,17 @@ class SessionChatRepository(
     }
     override fun openConversation(chatId: Long) {
         if (!live || active == chatId) return
-        val old = active; active = chatId; atLatest = true; viewportNearLatest = true; viewportScrolling = false; seenArrivals.clear(); historyGeneration++; historyJob?.cancel()
-        window.clear(); versions.clear(); replaced.clear(); visibleReads.clear(); messageState.value = emptyList()
-        historyState.value = HistoryState(chatId)
+        val restore = retainedChat == chatId
+        val old = active; active = chatId; retainedChat = chatId
+        if (!restore) { atLatest = true; viewportNearLatest = true; viewportScrolling = false; seenArrivals.clear() }
+        historyGeneration++; historyJob?.cancel()
+        if (!restore) {
+            window.clear(); versions.clear(); replaced.clear(); visibleReads.clear(); messageState.value = emptyList()
+            historyState.value = HistoryState(chatId)
+        } else {
+            historyState.update { it.copy(loading = false) }
+            if (window.isNotEmpty()) diagnostic(SessionEvent.CachedMessagesAvailable)
+        }
         sessionScope?.launch { try { old?.let { client.closeChat(it) }; client.openChat(chatId) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {} }
         sessionScope?.launch {
             try {
@@ -274,11 +289,13 @@ class SessionChatRepository(
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { /* Keep the last confirmed permission; TDLib rechecks on send. */ }
         }
-        loadOlder(chatId)
+        if (window.isEmpty()) loadOlder(chatId)
     }
     override fun closeConversation(chatId: Long) {
         if (!live || active != chatId) return
-        active = null; historyGeneration++; historyJob?.cancel(); window.clear(); messageState.value = emptyList(); historyState.value = HistoryState()
+        active = null; historyGeneration++; historyJob?.cancel(); historyJob = null
+        // Stop visibility/read reporting, not the bounded same-account message cache.
+        historyState.update { it.copy(loading = false) }
         sessionScope?.launch { try { client.closeChat(chatId) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {} }
     }
     override fun loadOlder(chatId: Long) {
@@ -292,6 +309,18 @@ class SessionChatRepository(
         historyJob = sessionScope?.launch {
             historyState.value = HistoryState(chatId, loading = true, atLatest = atLatest)
             try {
+                if (window.isEmpty() && from == 0L) {
+                    val cached = try { client.localHistory(chatId, from, PAGE) }
+                        catch (cancelled: CancellationException) { throw cancelled }
+                        catch (_: Exception) { emptyList() }
+                    ensureActive(); if (generation != historyGeneration) return@launch
+                    cached.forEach { message -> if ((versions[message.id] ?: 0) <= startedAt) put(message, event = false) }
+                    if (cached.isNotEmpty()) publishMessages()
+                    if (cached.size >= PAGE) {
+                        historyState.value = HistoryState(chatId, hasMore = true, atLatest = atLatest)
+                        return@launch
+                    }
+                }
                 val page = client.history(chatId, from, PAGE)
                 ensureActive(); if (generation != historyGeneration) return@launch
                 val newIds = page.any { it.id != from && it.id !in window && it.id !in replaced }
@@ -459,7 +488,7 @@ class SessionChatRepository(
             catch (_: Exception) { avatarRequests.remove(photo.fileId) }
         }
     }
-    override fun latest(chatId: Long) { if (live) { closeConversation(chatId); openConversation(chatId) } }
+    override fun latest(chatId: Long) { if (live) { closeConversation(chatId); retainedChat = null; openConversation(chatId) } }
     override fun markRead(chatId: Long) { if (!live) demo.markRead(chatId) }
     override fun toggleReaction(chatId: Long, messageId: Long, reaction: String) {
         if (!live) { demo.toggleReaction(chatId, messageId, reaction); return }

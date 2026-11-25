@@ -14,6 +14,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.*
 import com.vector.messenger.feature.LocalAppearance
+import com.vector.messenger.feature.InterfaceStyle
+import androidx.compose.ui.text.font.FontFamily
 
 object Spacing { val small = 8.dp; val medium = 16.dp; val large = 24.dp }
 
@@ -94,8 +96,13 @@ internal fun auroraColors(accentIndex: Int, amoled: Boolean = false): DefaultCol
 fun DefaultTheme(content: @Composable () -> Unit) {
     val appearance = LocalAppearance.current
     val density = LocalDensity.current
-    val colors = remember(appearance.accent, appearance.amoledBlack) {
-        auroraColors(appearance.accent, appearance.amoledBlack)
+    val console = appearance.interfaceStyle == InterfaceStyle.Console
+    val colors = remember(appearance.accent, appearance.amoledBlack, console) {
+        val glass = auroraColors(appearance.accent, appearance.amoledBlack)
+        if (!console) glass else glass.copy(base = if (appearance.amoledBlack) Color.Black else Color(0xFF0B0C0F),
+            panel = if (appearance.amoledBlack) Color.Black else Color(0xFF101114), raised = Color(0xFF181A1F),
+            text = Color(0xFFF5F5F5), secondary = Color(0xFF8B8F98), line = Color(0xFF25272D),
+            secondaryAccent = glass.accent, outgoing = glass.accent.copy(alpha = .16f))
     }
     val scheme = remember(colors) {
         darkColorScheme().copy(
@@ -116,12 +123,12 @@ fun DefaultTheme(content: @Composable () -> Unit) {
             inversePrimary = colors.accent, scrim = colors.scrim,
         )
     }
-    CompositionLocalProvider(LocalDefaultColors provides colors,
+    CompositionLocalProvider(LocalDefaultColors provides colors, LocalFlatSurfaces provides console,
         LocalDensity provides Density(density.density, density.fontScale * appearance.typeScale / 100f)) {
-        MaterialTheme(colorScheme = scheme, typography = AuroraTypography, shapes = AuroraShapes) {
+        MaterialTheme(colorScheme = scheme, typography = if (console) ConsoleTypography else AuroraTypography, shapes = AuroraShapes) {
             FloatingBackdropHost {
             Box(Modifier.fillMaxSize().designCanvas()) {
-                AuroraField(Modifier.matchParentSize())
+                if (!console) AuroraField(Modifier.matchParentSize())
                 content()
             }
             }
@@ -139,3 +146,9 @@ private val AuroraTypography = Typography().let { base -> base.copy(
 ) }
 private val AuroraShapes = Shapes(extraSmall = RoundedCornerShape(10.dp), small = RoundedCornerShape(16.dp),
     medium = RoundedCornerShape(20.dp), large = RoundedCornerShape(24.dp), extraLarge = RoundedCornerShape(28.dp))
+
+private val ConsoleTypography = AuroraTypography.copy(
+    titleLarge = AuroraTypography.titleLarge.copy(fontFamily = FontFamily.Monospace),
+    titleMedium = AuroraTypography.titleMedium.copy(fontFamily = FontFamily.Monospace),
+    labelSmall = AuroraTypography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+)
