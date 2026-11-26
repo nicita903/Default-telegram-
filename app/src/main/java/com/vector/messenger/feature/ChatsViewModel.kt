@@ -59,6 +59,7 @@ class ChatsViewModel @Inject constructor(private val repository: ChatRepository,
     }
     fun enter(id: Long) = repository.openConversation(id)
     fun leave(id: Long) { stopTyping(id); repository.closeConversation(id) }
+    fun newer(id: Long) = repository.loadNewer(id)
     fun older(id: Long) = repository.loadOlder(id)
     fun visible(id: Long, ids: List<Long>) = repository.viewMessages(id, ids)
     fun retry(id: Long, messageId: Long) = repository.retry(id, messageId)

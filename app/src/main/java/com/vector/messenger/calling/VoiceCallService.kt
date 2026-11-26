@@ -58,7 +58,7 @@ class VoiceCallService : Service() {
     override fun onTaskRemoved(rootIntent: Intent?) { calls.end(); super.onTaskRemoved(rootIntent) }
     override fun onDestroy() {
         serviceScope.cancel()
-        proximity.release()
+        proximity.close()
         calls.serviceStopped(attempt)
         calls.sounds.serviceStopped(attempt)
         stopForeground(STOP_FOREGROUND_REMOVE)

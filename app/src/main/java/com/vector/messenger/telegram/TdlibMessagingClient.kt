@@ -31,6 +31,11 @@ class TdlibMessagingClient(private val manager: TdlibClientManager, private val 
         }
         return true
     }
+    override suspend fun chat(chatId: Long) = mapTelegramChat(call(request("getChat", "chat_id" to chatId)), manager::messagingPhoto)
+    override suspend fun historyAround(chatId: Long, anchor: Long, newer: Int, limit: Int) =
+        call(request("getChatHistory", "chat_id" to chatId, "from_message_id" to anchor, "offset" to -newer.coerceIn(1, 99),
+            "limit" to limit.coerceIn(newer.coerceIn(1, 99) + 1, 100), "only_local" to false))
+            .optJSONArray("messages")?.objects()?.map(::mapTelegramMessage).orEmpty()
     override suspend fun localHistory(chatId: Long, fromId: Long, limit: Int) =
         call(request("getChatHistory", "chat_id" to chatId, "from_message_id" to fromId, "offset" to 0,
             "limit" to limit.coerceIn(1, 100), "only_local" to true)).optJSONArray("messages")?.objects()?.map(::mapTelegramMessage).orEmpty()

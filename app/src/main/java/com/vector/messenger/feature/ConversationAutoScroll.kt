@@ -27,6 +27,7 @@ internal fun rememberConversationScroll(chatId: Long, session: Long, list: LazyL
     val bookmark = remember(chatId, session) { vm.scrollBookmarks[session to chatId] }
     val heights = remember(chatId, session) { mutableMapOf<Long, Int>() }
     val threshold = with(LocalDensity.current) { 80.dp.toPx() }
+    val headerPixels = with(LocalDensity.current) { com.vector.messenger.design.LocalConversationHeaderInset.current.toPx() }
     val scope = rememberCoroutineScope()
     val currentMessages by rememberUpdatedState(messages)
     val currentHistory by rememberUpdatedState(history)
@@ -45,19 +46,27 @@ internal fun rememberConversationScroll(chatId: Long, session: Long, list: LazyL
     // Initial fresh chats are already index zero. On return restore by message ID, not an index
     // potentially shifted by newer messages. History loading remains bounded by the existing window.
     val messageIds = remember(messages) { messages.map { it.id } }
-    LaunchedEffect(chatId, session, messageIds, history.loading, history.hasMore) {
+    LaunchedEffect(chatId, session, messageIds, history.loading, history.hasMore, history.initializing, history.initialMessageId) {
         if (!control.restoring) return@LaunchedEffect
-        if (messages.isEmpty()) return@LaunchedEffect
+        if (messages.isEmpty() || (history.chatId != null && history.chatId != chatId) || history.initializing) return@LaunchedEffect
         val index = bookmark?.anchor?.let { anchor -> messages.asReversed().indexOfFirst { it.id == anchor } } ?: -1
         if (index >= 0) {
-            list.requestScrollToItem(index, bookmark?.offset ?: 0)
+            list.scrollToItem(index, bookmark?.offset ?: 0)
             control.restoring = false
         } else if (bookmark?.anchor != null && !bookmark.nearLatest && messages.minOf { it.id } > bookmark.anchor && history.hasMore && messages.size < com.vector.core.messaging.SessionChatRepository.WINDOW) {
             if (!history.loading) vm.older(chatId)
         } else {
-            list.requestScrollToItem(0)
+            val unreadIndex = history.initialMessageId?.let { id -> messages.asReversed().indexOfFirst { it.id == id } } ?: -1
+            if (unreadIndex >= 0) {
+                list.scrollToItem(unreadIndex)
+                val layout = list.layoutInfo
+                val row = layout.visibleItemsInfo.firstOrNull { it.key == history.initialMessageId }
+                if (row != null) {
+                    val offset = -(layout.viewportEndOffset - row.size - headerPixels.toInt()).coerceAtLeast(0)
+                    list.scrollToItem(unreadIndex, offset)
+                }
+            } else list.scrollToItem(0)
             control.restoring = false
-            if (!history.atLatest) vm.latest(chatId)
         }
     }
     LaunchedEffect(list, chatId, session, threshold) {

@@ -26,6 +26,7 @@ interface ChatRepository {
     fun openConversation(chatId: Long) {}
     fun closeConversation(chatId: Long) {}
     fun loadOlder(chatId: Long) {}
+    fun loadNewer(chatId: Long) {}
     fun viewMessages(chatId: Long, messageIds: List<Long>) {}
     fun retry(chatId: Long, messageId: Long) {}
     fun avatar(chatId: Long) {}
@@ -35,7 +36,9 @@ interface ChatRepository {
 data class ChatStatus(val live: Boolean = false, val session: Long = 0, val loading: Boolean = false,
     val mainMore: Boolean = false, val archiveMore: Boolean = false, val error: String? = null,
     val connection: com.vector.core.profile.ProfileConnection = com.vector.core.profile.ProfileConnection.Connecting)
-data class HistoryState(val chatId: Long? = null, val loading: Boolean = false, val hasMore: Boolean = true, val error: String? = null, val atLatest: Boolean = true)
+data class HistoryState(val chatId: Long? = null, val loading: Boolean = false, val hasMore: Boolean = true, val error: String? = null, val atLatest: Boolean = true,
+    val initializing: Boolean = false, val initialMessageId: Long? = null, val unreadMessageId: Long? = null,
+    val initialUnreadCount: Int = 0, val hasNewer: Boolean = false)
 private object DefaultChatState {
     val reactionError = kotlinx.coroutines.flow.MutableStateFlow<String?>(null)
     val status = kotlinx.coroutines.flow.MutableStateFlow(ChatStatus())

@@ -7,7 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 
 data class ChatPosition(val archived: Boolean, val order: Long, val pinned: Boolean)
 data class TelegramChat(val chat: Chat, val positions: List<ChatPosition>, val lastMessageId: Long = 0, val lastReadOutbox: Long = 0,
-    val peerId: Long = 0, val supergroup: Boolean = false, val lastRestricted: Boolean = false)
+    val peerId: Long = 0, val supergroup: Boolean = false, val lastRestricted: Boolean = false, val lastReadInbox: Long = 0)
 sealed interface ChatUpdate {
     data class Snapshot(val value: TelegramChat) : ChatUpdate
     data class Position(val id: Long, val value: ChatPosition) : ChatUpdate
@@ -15,7 +15,7 @@ sealed interface ChatUpdate {
     data class Preview(val id: Long, val text: String, val time: String, val lastId: Long, val positions: List<ChatPosition>, val restricted: Boolean = false) : ChatUpdate
     data class Title(val id: Long, val title: String) : ChatUpdate
     data class Photo(val id: Long, val photo: ProfilePhoto?) : ChatUpdate
-    data class Unread(val id: Long, val count: Int) : ChatUpdate
+    data class Unread(val id: Long, val count: Int, val lastReadInbox: Long = 0) : ChatUpdate
     data class ReadOutbox(val id: Long, val lastId: Long) : ChatUpdate
     data class Permissions(val id: Long, val canSend: Boolean, val canSendPhotos: Boolean = canSend, val canSendDocuments: Boolean = canSend) : ChatUpdate
     data class Protection(val id: Long, val protected: Boolean) : ChatUpdate
@@ -35,6 +35,8 @@ interface TelegramMessagingClient {
     val connection: StateFlow<ProfileConnection>
     suspend fun loadChats(archived: Boolean, limit: Int): Boolean
     suspend fun localHistory(chatId: Long, fromId: Long, limit: Int): List<Message> = emptyList()
+    suspend fun chat(chatId: Long): TelegramChat? = null
+    suspend fun historyAround(chatId: Long, anchor: Long, newer: Int, limit: Int): List<Message> = history(chatId, anchor, limit)
     suspend fun history(chatId: Long, fromId: Long, limit: Int): List<Message>
     suspend fun sendText(chatId: Long, text: String, replyTo: Long?): Message
     suspend fun editText(chatId: Long, messageId: Long, text: String): Message = throw MessagingException(MessagingFailure.Unavailable)

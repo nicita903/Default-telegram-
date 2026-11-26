@@ -42,6 +42,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.repeatOnLifecycle
 import androidx.lifecycle.compose.LifecycleStartEffect
 import com.vector.core.*
 import com.vector.messenger.design.*
@@ -146,16 +147,24 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
     val visibilityMessages by rememberUpdatedState(newestFirst)
     val visibilityHistory by rememberUpdatedState(history)
     val visibilityLive by rememberUpdatedState(status.live)
-    LaunchedEffect(listState, chatId, status.session, visibleTop) {
-        snapshotFlow {
-            val current = visibilityMessages
-            val page = visibilityHistory
-            val ids = listState.layoutInfo.visibleItemsInfo.filter { it.offset + it.size > visibleTop }
-                .mapNotNull { item -> current.getOrNull(item.index)?.id }
-            ids to (visibilityLive && ids.any { it == current.lastOrNull()?.id } && !page.loading && page.error == null && page.hasMore)
-        }.collect { (ids, older) ->
-            viewModel.visible(chatId, ids)
-            if (older) viewModel.older(chatId)
+    val conversationLifecycle = androidx.lifecycle.compose.LocalLifecycleOwner.current.lifecycle
+    LaunchedEffect(listState, chatId, status.session, visibleTop, conversationLifecycle) {
+        conversationLifecycle.repeatOnLifecycle(androidx.lifecycle.Lifecycle.State.RESUMED) {
+            snapshotFlow {
+                val current = visibilityMessages
+                val page = visibilityHistory
+                val layout = listState.layoutInfo
+                val ready = !autoScroll.restoring && !page.initializing && (page.chatId == null || page.chatId == chatId)
+                val ids = if (!ready) emptyList() else layout.visibleItemsInfo
+                    .filter { it.offset + it.size > visibleTop && it.offset < layout.viewportEndOffset }
+                    .mapNotNull { item -> current.getOrNull(item.index)?.id }
+                Triple(ids,
+                    ready && visibilityLive && ids.any { it == current.lastOrNull()?.id } && !page.loading && page.error == null && page.hasMore,
+                    ready && visibilityLive && ids.any { it == current.firstOrNull()?.id } && !page.loading && page.error == null && page.hasNewer)
+            }.collect { (ids, older, newer) ->
+                viewModel.visible(chatId, ids)
+                if (older) viewModel.older(chatId) else if (newer) viewModel.newer(chatId)
+            }
         }
     }
     fun submitSelectedPhotos() {
@@ -190,7 +199,7 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
     LaunchedEffect(recording, editId) { if (recording || editId != null) viewModel.stopTyping(chatId, notify = !recording) }
     Column(Modifier.fillMaxSize().designCanvas(colors.canvas).imePadding()) {
         Box(Modifier.weight(1f).fillMaxWidth()) {
-        LazyColumn(state = listState, reverseLayout = true, modifier = Modifier.fillMaxSize().conversationMessageDissolve().testTag("message_list"),
+        LazyColumn(state = listState, reverseLayout = true, modifier = Modifier.fillMaxSize().graphicsLayer { alpha = if (status.live && autoScroll.restoring && history.error == null) 0f else 1f }.conversationMessageDissolve().testTag("message_list"),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = headerInset + 20.dp, bottom = 20.dp)) {
             itemsIndexed(newestFirst, key = { _, it -> it.id }, contentType = { _, _ -> "message" }) { index, message ->
                 val outgoing = message.outgoing
@@ -202,6 +211,10 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
                 val grouped = position == MessageGroupPosition.MIDDLE || position == MessageGroupPosition.LAST
                 Column {
                 MessageDateSeparator(message.date, previous?.date)
+                if (history.chatId == chatId && history.unreadMessageId == message.id) {
+                    Text("${history.initialUnreadCount} unread messages", Modifier.fillMaxWidth().padding(vertical = 6.dp),
+                        color = colors.accent, style = MaterialTheme.typography.labelSmall, textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+                }
                 Row(Modifier.fillMaxWidth().padding(top = if (grouped) 2.dp else 8.dp).excludeModuleGestures(), horizontalArrangement = if (outgoing) Arrangement.End else Arrangement.Start, verticalAlignment = Alignment.Bottom) {
                     if (!outgoing && chat?.kind == ChatKind.Group) { TelegramAvatar(message.senderName ?: chat.title, if (message.senderId != 0L) null else chat.photo, 28.dp, if (message.senderId != 0L) message.senderId else chat.id, user = message.senderId != 0L && !message.senderIsChat); Spacer(Modifier.width(8.dp)) }
                     Column {
@@ -229,7 +242,7 @@ fun ConversationScreen(chatId: Long, viewModel: ChatsViewModel) {
             if (status.live) item(key = "history_controls") {
                 Column {
                     if (history.loading) Text("Loading messages…", color = colors.secondary)
-                    else if (history.hasMore || history.error != null) DefaultAction(history.error ?: "Load earlier messages", { viewModel.older(chatId) })
+                    else if (history.hasMore || history.error != null) DefaultAction(history.error ?: "Load earlier messages", { if (history.error != null && history.hasNewer) viewModel.newer(chatId) else viewModel.older(chatId) })
                     if (messages.size >= com.vector.core.messaging.SessionChatRepository.WINDOW) DefaultAction("Latest messages", { viewModel.latest(chatId) })
                 }
             }

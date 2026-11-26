@@ -133,7 +133,7 @@ internal fun mapTelegramChat(json: JSONObject, photo: (JSONObject) -> ProfilePho
         canSendPhotos = !blocked && json.optJSONObject("permissions")?.optBoolean("can_send_photos") == true,
         canSendDocuments = !blocked && json.optJSONObject("permissions")?.optBoolean("can_send_documents") == true,
         userId = type.optLong("user_id").takeIf { it > 0 }), positions(json),
-        lastMessageId = last?.optLong("id") ?: 0, lastReadOutbox = json.optLong("last_read_outbox_message_id"),
+        lastMessageId = last?.optLong("id") ?: 0, lastReadOutbox = json.optLong("last_read_outbox_message_id"), lastReadInbox = json.optLong("last_read_inbox_message_id"),
         peerId = if (type.optString("@type") == "chatTypeSupergroup") type.optLong("supergroup_id") else type.optLong("user_id"),
         supergroup = type.optString("@type") == "chatTypeSupergroup", lastRestricted = last?.let(::restrictedMessage) == true)
 }
@@ -150,7 +150,7 @@ internal fun mapChatUpdate(json: JSONObject, photo: (JSONObject) -> ProfilePhoto
         }
         "updateChatTitle" -> ChatUpdate.Title(id, json.safeText("title"))
         "updateChatPhoto" -> ChatUpdate.Photo(id, json.optJSONObject("photo")?.optJSONObject("small")?.let(photo))
-        "updateChatReadInbox" -> ChatUpdate.Unread(id, json.optInt("unread_count"))
+        "updateChatReadInbox" -> ChatUpdate.Unread(id, json.optInt("unread_count"), json.optLong("last_read_inbox_message_id"))
         "updateChatReadOutbox" -> ChatUpdate.ReadOutbox(id, json.optLong("last_read_outbox_message_id"))
         "updateChatPermissions" -> ChatUpdate.Permissions(id, json.optJSONObject("permissions")?.optBoolean("can_send_basic_messages") == true,
             json.optJSONObject("permissions")?.optBoolean("can_send_photos") == true,

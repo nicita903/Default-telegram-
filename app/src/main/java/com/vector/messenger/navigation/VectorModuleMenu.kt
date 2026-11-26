@@ -7,6 +7,8 @@ import androidx.compose.animation.core.MutableTransitionState
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -45,7 +47,7 @@ private val AppModule.icon: ImageVector get() = when (this) {
  * whole display, keeps the Aurora field visible behind it, and does not open a second window.
  * The screen it covers is blurred by the caller (see `backdropBlur`); the scrim here stays
  * translucent only while that blur actually renders, so the list is never sharp behind the rows.
- * Dismissal stays on the close control, module selection and Android Back, all owned by the caller.
+ * A dismissible scrim surrounds the content; the caller owns the single visibility state.
  */
 @Composable
 fun VectorModuleMenu(open: Boolean, active: AppModule, onDismiss: () -> Unit, onSelect: (AppModule) -> Unit, onAccount: () -> Unit = {}, onSearch: () -> Unit = {}, onProfile: () -> Unit = {}) {
@@ -54,6 +56,8 @@ fun VectorModuleMenu(open: Boolean, active: AppModule, onDismiss: () -> Unit, on
     val appearance = LocalAppearance.current
     val colors = DefaultDesign.colors
     val scrim = backdropScrim()
+    val dismiss by rememberUpdatedState({ if (open) onDismiss() })
+    val swipeDistance = with(LocalDensity.current) { 48.dp.toPx() }
     val transition = remember { MutableTransitionState(false) }.apply { targetState = open }
     if (transition.currentState || transition.targetState) {
         AnimatedVisibility(
@@ -61,17 +65,30 @@ fun VectorModuleMenu(open: Boolean, active: AppModule, onDismiss: () -> Unit, on
             enter = VectorMotionSpec.menuEnter(appearance),
             exit = VectorMotionSpec.menuExit(appearance),
         ) {
-            Column(
-                Modifier.fillMaxSize()
-                    .background(colors.base.copy(alpha = scrim))
-                    .windowInsetsPadding(WindowInsets.safeDrawing)
-                    .testTag("module_menu")
-                    .semantics { paneTitle = "Module navigation" }
-                    // A full-screen sheet must swallow taps on its empty areas, otherwise a tap
-                    // beside the last row would reach the list behind it.
-                    .pointerInput(Unit) { detectTapGestures(onTap = {}) }
-                    .verticalScroll(rememberScrollState()),
-            ) {
+            Box(Modifier.fillMaxSize().background(colors.base.copy(alpha = scrim))
+                .pointerInput(swipeDistance) {
+                    var displacement = 0f
+                    detectHorizontalDragGestures(
+                        onDragStart = { displacement = 0f },
+                        onHorizontalDrag = { change, amount -> change.consume(); displacement += amount },
+                        onDragCancel = { displacement = 0f },
+                        onDragEnd = { if (displacement <= -swipeDistance) dismiss(); displacement = 0f },
+                    )
+                }) {
+                // Keep this shield through the existing exit animation, so rapid taps cannot
+                // reach application controls while the menu is fading out.
+                Box(Modifier.matchParentSize().testTag("module_menu_scrim")
+                    .semantics { onClick("Close navigation") { dismiss(); true } }
+                    .pointerInput(Unit) { detectTapGestures(onTap = { dismiss() }) })
+                Column(
+                    Modifier.fillMaxWidth()
+                        .windowInsetsPadding(WindowInsets.safeDrawing)
+                        .testTag("module_menu")
+                        .semantics { paneTitle = "Module navigation" }
+                        // This content-sized sibling shields empty space INSIDE the menu.
+                        .pointerInput(Unit) { detectTapGestures(onTap = {}) }
+                        .verticalScroll(rememberScrollState()),
+                ) {
                 Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 12.dp, top = 14.dp, bottom = 6.dp),
                     verticalAlignment = Alignment.CenterVertically) {
                     Row(Modifier.weight(1f).heightIn(min = 48.dp).clickable(onClickLabel = "Open profile") {
@@ -122,6 +139,7 @@ fun VectorModuleMenu(open: Boolean, active: AppModule, onDismiss: () -> Unit, on
                     DefaultAction("Account", onAccount, Modifier.weight(1f), Icons.Default.Person)
                 }
                 Spacer(Modifier.height(20.dp))
+                }
             }
         }
     }

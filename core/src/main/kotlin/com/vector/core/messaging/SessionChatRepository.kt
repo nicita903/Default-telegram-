@@ -65,6 +65,7 @@ class SessionChatRepository(
     private val photoCancellations = mutableSetOf<Pair<Long, Long>>()
     private var active: Long? = null
     private var retainedChat: Long? = null
+    private var forceLatestChat: Long? = null
     private var atLatest = true
     private var live = false
     private var epoch = 0L
@@ -72,7 +73,7 @@ class SessionChatRepository(
     init {
         scope.launch {
             authentication.state.map { it.step == AuthStep.Ready }.distinctUntilChanged().collectLatest { ready ->
-                epoch++; live = ready; active = null; retainedChat = null; atLatest = true; seenArrivals.clear(); viewportNearLatest = true; viewportScrolling = false; historyGeneration++
+                epoch++; live = ready; forceLatestChat = null; active = null; retainedChat = null; atLatest = true; seenArrivals.clear(); viewportNearLatest = true; viewportScrolling = false; historyGeneration++
                 records.clear(); access.clear(); window.clear(); versions.clear(); replaced.clear(); visibleReads.clear(); reactionRequests.clear(); reactionErrorState.value = null
                 orderDirty = true; ordered = emptyList()
                 sends.clear(); retries.clear(); photoCancellations.clear(); avatarRequests.clear(); listJobs.clear(); publish = null; historyJob = null
@@ -155,12 +156,12 @@ class SessionChatRepository(
         if (event) { revision++; versions[message.id] = revision }
         window[message.id] = normalize(message).let { it.copy(senderName = access[it.senderId to false]?.displayName ?: it.senderName) }
     }
-    private fun publishMessages(older: Boolean = false) {
+    private fun publishMessages(older: Boolean = false, newer: Boolean = false) {
         // Reactions, read receipts and media progress do not change message ordering.
         if (messageOrder.size != window.size || messageOrder.any { it !in window }) messageOrder = window.keys.sorted()
         if (older && messageOrder.size > WINDOW) atLatest = false
         if (messageOrder.size > WINDOW) {
-            messageOrder = if (older || !atLatest) messageOrder.take(WINDOW) else messageOrder.takeLast(WINDOW)
+            messageOrder = if (!newer && (older || !atLatest)) messageOrder.take(WINDOW) else messageOrder.takeLast(WINDOW)
             window.keys.retainAll(messageOrder.toHashSet())
         }
         val bounded = messageOrder.mapNotNull(window::get)
@@ -180,7 +181,7 @@ class SessionChatRepository(
             is ChatUpdate.Preview -> change(update.id) { it.copy(chat = it.chat.copy(preview = update.text, time = update.time), lastMessageId = update.lastId, positions = update.positions, lastRestricted = update.restricted) }
             is ChatUpdate.Title -> change(update.id) { it.copy(chat = it.chat.copy(title = update.title)) }
             is ChatUpdate.Photo -> change(update.id) { it.copy(chat = it.chat.copy(photo = update.photo)) }
-            is ChatUpdate.Unread -> change(update.id) { it.copy(chat = it.chat.copy(unread = update.count)) }
+            is ChatUpdate.Unread -> change(update.id) { it.copy(chat = it.chat.copy(unread = update.count), lastReadInbox = update.lastReadInbox) }
             is ChatUpdate.Permissions -> change(update.id) { it.copy(chat = it.chat.copy(canSend = update.canSend, canSendPhotos = update.canSendPhotos, canSendDocuments = update.canSendDocuments)) }
             is ChatUpdate.Protection -> change(update.id) { it.copy(chat = it.chat.copy(protectedContent = update.protected)) }
             is ChatUpdate.ReadOutbox -> {
@@ -274,7 +275,7 @@ class SessionChatRepository(
         historyGeneration++; historyJob?.cancel()
         if (!restore) {
             window.clear(); versions.clear(); replaced.clear(); visibleReads.clear(); messageState.value = emptyList()
-            historyState.value = HistoryState(chatId)
+            historyState.value = HistoryState(chatId, loading = true, initializing = true)
         } else {
             historyState.update { it.copy(loading = false) }
             if (window.isNotEmpty()) diagnostic(SessionEvent.CachedMessagesAvailable)
@@ -289,7 +290,11 @@ class SessionChatRepository(
             } catch (cancelled: CancellationException) { throw cancelled }
             catch (_: Exception) { /* Keep the last confirmed permission; TDLib rechecks on send. */ }
         }
-        if (window.isEmpty()) loadOlder(chatId)
+        if (window.isEmpty()) {
+            val latest = forceLatestChat == chatId
+            forceLatestChat = null
+            loadInitial(chatId, latest)
+        }
     }
     override fun closeConversation(chatId: Long) {
         if (!live || active != chatId) return
@@ -298,8 +303,86 @@ class SessionChatRepository(
         historyState.update { it.copy(loading = false) }
         sessionScope?.launch { try { client.closeChat(chatId) } catch (cancelled: CancellationException) { throw cancelled } catch (_: Exception) {} }
     }
+    private fun loadInitial(chatId: Long, latest: Boolean) {
+        if (records[chatId]?.let { access[it.peerId to it.supergroup]?.restricted } == true) {
+            historyState.value = HistoryState(chatId, hasMore = false, error = "Content unavailable in this client.")
+            return
+        }
+        val generation = historyGeneration
+        atLatest = false; viewportNearLatest = false
+        historyState.value = HistoryState(chatId, loading = true, initializing = true, atLatest = false)
+        historyJob = sessionScope?.launch {
+            try {
+                val record = try { client.chat(chatId) ?: records[chatId] }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { records[chatId] }
+                ensureActive(); if (generation != historyGeneration || active != chatId) return@launch
+                val unread = if (latest) 0 else record?.chat?.unread ?: 0
+                val boundary = record?.lastReadInbox ?: 0L
+                val opening = linkedMapOf<Long, Message>()
+                var target: Long? = null
+                if (unread > 0) {
+                    // TDLib history ordering is per-chat decreasing message_id. Resolve the
+                    // nearest incoming message AFTER the read boundary through the native API,
+                    // including when that boundary was deleted. Zero means all unread;
+                    // 1 is a lower-bound history anchor, never an assumed existing message.
+                    var cursor = boundary.coerceAtLeast(1L)
+                    for (attempt in 0 until 3) {
+                        val page = client.historyAround(chatId, cursor, PAGE - 1, PAGE)
+                        ensureActive(); if (generation != historyGeneration) return@launch
+                        page.forEach { opening[it.id] = it }
+                        target = opening.values.sortedBy { it.id }.firstOrNull { !it.outgoing && it.id > boundary }?.id
+                        if (target != null) break
+                        val next = page.maxOfOrNull { it.id } ?: cursor
+                        if (next <= cursor && attempt > 0) break
+                        cursor = maxOf(cursor, next)
+                    }
+                    target?.let { id -> client.history(chatId, id, 12).forEach { opening[it.id] = it } }
+                }
+                if (opening.isEmpty()) client.history(chatId, 0, PAGE).forEach { opening[it.id] = it }
+                ensureActive(); if (generation != historyGeneration || active != chatId) return@launch
+                atLatest = unread == 0 || (record?.lastMessageId ?: 0L).let { it > 0 && opening.containsKey(it) }
+                opening.values.forEach { put(it, event = false) }
+                publishMessages()
+                historyState.value = HistoryState(chatId, hasMore = opening.isNotEmpty(), atLatest = atLatest,
+                    initialMessageId = target ?: if (unread > 0) opening.keys.minOrNull() else null,
+                    unreadMessageId = target, initialUnreadCount = if (target != null) unread else 0, hasNewer = !atLatest)
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) {
+                if (generation == historyGeneration) historyState.value = HistoryState(chatId,
+                    error = "Unable to load the opening position. Tap to retry.", initializing = false, atLatest = false)
+            }
+        }
+    }
+    override fun loadNewer(chatId: Long) {
+        if (!live || active != chatId || historyJob?.isActive == true || !history.value.hasNewer || history.value.initializing) return
+        val from = window.keys.maxOrNull() ?: return
+        val generation = historyGeneration
+        val startedAt = revision
+        historyJob = sessionScope?.launch {
+            historyState.update { it.copy(loading = true, error = null) }
+            try {
+                var page = emptyList<Message>()
+                for (attempt in 0 until 3) {
+                    page = client.historyAround(chatId, from, PAGE - 1, PAGE).filter { it.id > from }
+                    ensureActive(); if (generation != historyGeneration) return@launch
+                    if (page.isNotEmpty() || records[chatId]?.lastMessageId == from) break
+                }
+                if (page.isEmpty() && records[chatId]?.lastMessageId?.let { it > from } == true) {
+                    historyState.update { it.copy(loading = false, error = "Unable to load newer messages. Tap to retry.") }
+                    return@launch
+                }
+                page.forEach { if ((versions[it.id] ?: 0) <= startedAt) put(it, event = false) }
+                atLatest = page.isEmpty() || records[chatId]?.lastMessageId?.let { it in window } == true
+                publishMessages(newer = true)
+                historyState.update { it.copy(loading = false, hasMore = true, hasNewer = !atLatest, atLatest = atLatest) }
+            } catch (cancelled: CancellationException) { throw cancelled }
+            catch (_: Exception) { if (generation == historyGeneration) historyState.update { it.copy(loading = false, error = "Unable to load newer messages. Tap to retry.") } }
+        }
+    }
     override fun loadOlder(chatId: Long) {
         if (!live || active != chatId || historyJob?.isActive == true || !history.value.hasMore) return
+        if (window.isEmpty()) { loadInitial(chatId, latest = false); return }
         if (records[chatId]?.let { access[it.peerId to it.supergroup]?.restricted } == true) {
             historyState.value = HistoryState(chatId, hasMore = false, error = "Content unavailable in this client."); return
         }
@@ -307,7 +390,7 @@ class SessionChatRepository(
         val from = window.keys.minOrNull() ?: 0
         val startedAt = revision
         historyJob = sessionScope?.launch {
-            historyState.value = HistoryState(chatId, loading = true, atLatest = atLatest)
+            historyState.update { it.copy(chatId = chatId, loading = true, atLatest = atLatest, error = null) }
             try {
                 if (window.isEmpty() && from == 0L) {
                     val cached = try { client.localHistory(chatId, from, PAGE) }
@@ -317,7 +400,7 @@ class SessionChatRepository(
                     cached.forEach { message -> if ((versions[message.id] ?: 0) <= startedAt) put(message, event = false) }
                     if (cached.isNotEmpty()) publishMessages()
                     if (cached.size >= PAGE) {
-                        historyState.value = HistoryState(chatId, hasMore = true, atLatest = atLatest)
+                        historyState.update { it.copy(chatId = chatId, loading = false, hasMore = true, atLatest = atLatest) }
                         return@launch
                     }
                 }
@@ -326,9 +409,9 @@ class SessionChatRepository(
                 val newIds = page.any { it.id != from && it.id !in window && it.id !in replaced }
                 page.forEach { message -> if ((versions[message.id] ?: 0) <= startedAt) put(message, event = false) }
                 publishMessages(older = from != 0L)
-                historyState.value = HistoryState(chatId, hasMore = newIds, atLatest = atLatest)
+                historyState.update { it.copy(chatId = chatId, loading = false, hasMore = newIds, atLatest = atLatest, hasNewer = !atLatest) }
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (_: Exception) { if (generation == historyGeneration) historyState.value = HistoryState(chatId, error = "Unable to load messages. Tap to retry.", atLatest = atLatest) }
+            catch (_: Exception) { if (generation == historyGeneration) historyState.update { it.copy(chatId = chatId, loading = false, error = "Unable to load messages. Tap to retry.", atLatest = atLatest) } }
         }
     }
     override suspend fun send(chatId: Long, text: String, replyTo: Long?, attachment: Attachment?): SendResult {
@@ -467,8 +550,8 @@ class SessionChatRepository(
         }
     }
     override fun viewMessages(chatId: Long, messageIds: List<Long>) {
-        if (!live || active != chatId) return
-        val ids = messageIds.filter { it in window && it !in visibleReads && window[it]?.delivery !in listOf(Delivery.Sending, Delivery.Failed) }.take(100)
+        if (!live || active != chatId || history.value.initializing) return
+        val ids = messageIds.filter { it in window && window[it]?.outgoing == false && it !in visibleReads && window[it]?.delivery !in listOf(Delivery.Sending, Delivery.Failed) }.take(100)
         if (ids.isEmpty()) return
         visibleReads += ids
         sessionScope?.launch {
@@ -488,7 +571,7 @@ class SessionChatRepository(
             catch (_: Exception) { avatarRequests.remove(photo.fileId) }
         }
     }
-    override fun latest(chatId: Long) { if (live) { closeConversation(chatId); retainedChat = null; openConversation(chatId) } }
+    override fun latest(chatId: Long) { if (live) { closeConversation(chatId); retainedChat = null; forceLatestChat = chatId; openConversation(chatId) } }
     override fun markRead(chatId: Long) { if (!live) demo.markRead(chatId) }
     override fun toggleReaction(chatId: Long, messageId: Long, reaction: String) {
         if (!live) { demo.toggleReaction(chatId, messageId, reaction); return }
