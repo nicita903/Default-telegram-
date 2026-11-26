@@ -22,10 +22,8 @@ class TelegramPushRegistration @Inject constructor(@ApplicationContext private v
     private val manager: TdlibClientManager, private val profile: ProfileRepository, private val scope: CoroutineScope) {
     private val storage = context.getSharedPreferences("telegram_push_registration", Context.MODE_PRIVATE)
     private val tokens = MutableStateFlow<String?>(null)
-    private val reconcile = MutableStateFlow(0L)
     private val mutable = MutableStateFlow("Firebase configuration required")
     val state = mutable.asStateFlow()
-    private val attempts = mutableMapOf<String, Long>()
     private var started = false
     private var firebase: FirebaseApp? = null
     private var hadAccount = false
@@ -52,35 +50,58 @@ class TelegramPushRegistration @Inject constructor(@ApplicationContext private v
         }
         scope.launch {
             combine(profile.state.map { if (it.authenticated) it.profile?.id else null }.distinctUntilChanged(), tokens,
-                profile.state.map { it.connection == ProfileConnection.Ready }.distinctUntilChanged(), reconcile) { account, token, connected, _ -> Triple(account, token, connected) }
-                .collect { (account, token, _) ->
-                    if (account == null || token == null) return@collect
+                profile.state.map { it.connection == ProfileConnection.Ready }.distinctUntilChanged()) { account, token, connected -> Triple(account, token, connected) }
+                .distinctUntilChanged().collectLatest { (account, token, connected) ->
+                    if (account == null || token == null || !connected) return@collectLatest
                     val hash = digest(token)
                     val prefix = "telegram:$account:"
-                    val saved = withContext(Dispatchers.IO) {
-                        storage.getString(prefix + "tokenHash", null) == hash && storage.getLong(prefix + "receiver", 0) != 0L &&
-                            System.currentTimeMillis() - storage.getLong(prefix + "confirmedAt", 0) < TimeUnit.DAYS.toMillis(1)
-                    }
-                    if (saved) { mutable.value = "Registered; delivery verification required"; return@collect }
-                    val attempt = "$account:$hash"
-                    val now = android.os.SystemClock.elapsedRealtime()
-                    if (now - (attempts[attempt] ?: -TimeUnit.MINUTES.toMillis(5)) < TimeUnit.MINUTES.toMillis(5)) return@collect
-                    attempts[attempt] = now
-                    PushDiagnostics.event("TDLib push registration attempted")
-                    mutable.value = "Registering Telegram push"
-                    try {
-                        val response = manager.messagingRequest(request("registerDevice", "device_token" to request("deviceTokenFirebaseCloudMessaging", "token" to token, "encrypt" to true), "other_user_ids" to JSONArray()), account)
-                        check(response.optString("@type") == "pushReceiverId")
-                        val receiver = response.exactLong("id")
-                        check(receiver != 0L && profile.state.value.profile?.id == account && profile.state.value.authenticated)
-                        withContext(Dispatchers.IO) {
-                            check(storage.edit().putString(prefix + "tokenHash", hash).putLong(prefix + "receiver", receiver)
-                                .putLong(prefix + "confirmedAt", System.currentTimeMillis()).putLong("current", account).commit())
+                    var backoff = 15_000L
+                    while (currentCoroutineContext().isActive) {
+                        val confirmedAt = withContext(Dispatchers.IO) {
+                            if (storage.getString(prefix + "tokenHash", null) == hash && storage.getLong(prefix + "receiver", 0) != 0L)
+                                storage.getLong(prefix + "confirmedAt", 0) else 0L
                         }
-                        mutable.value = "Registered; delivery verification required"
-                        PushDiagnostics.event("TDLib push registration succeeded")
-                    } catch (cancelled: CancellationException) { throw cancelled }
-                      catch (_: Exception) { mutable.value = "Push registration failed; will retry on a later connection/resume"; PushDiagnostics.event("TDLib push registration failed") }
+                        val remaining = TimeUnit.DAYS.toMillis(1) - (System.currentTimeMillis() - confirmedAt)
+                        if (confirmedAt > 0 && remaining in 1..TimeUnit.DAYS.toMillis(1)) {
+                            mutable.value = "Registered; delivery verification required"
+                            delay(remaining)
+                            continue
+                        }
+                        PushDiagnostics.event("TDLIB_REGISTER_DEVICE_REQUESTED")
+                        mutable.value = "Registering Telegram push"
+                        try {
+                            val response = withTimeout(30_000) { manager.messagingRequest(request("registerDevice", "device_token" to request("deviceTokenFirebaseCloudMessaging", "token" to token, "encrypt" to true), "other_user_ids" to JSONArray()), account) }
+                            if (response.optString("@type") == "error") {
+                                PushDiagnostics.telegramFailure("TDLIB_REGISTER_DEVICE_FAILED", response)
+                                mutable.value = "Telegram push registration failed (${response.optInt("code")}); check Firebase/Telegram configuration"
+                                // A bad application key/token requires configuration or a new token, not a retry loop.
+                                if (response.optInt("code") in listOf(400, 401, 403)) return@collectLatest
+                            } else {
+                                check(response.optString("@type") == "pushReceiverId")
+                                val receiver = response.exactLong("id")
+                                check(receiver != 0L && profile.state.value.profile?.id == account && profile.state.value.authenticated && tokens.value == token)
+                                withContext(Dispatchers.IO) {
+                                    check(storage.edit().putString(prefix + "tokenHash", hash).putLong(prefix + "receiver", receiver)
+                                        .putLong(prefix + "confirmedAt", System.currentTimeMillis()).putLong("current", account).commit())
+                                }
+                                mutable.value = "Registered; delivery verification required"
+                                PushDiagnostics.event("TDLIB_REGISTER_DEVICE_SUCCEEDED")
+                                backoff = 15_000L
+                                continue
+                            }
+                        } catch (timeout: TimeoutCancellationException) {
+                            mutable.value = "Push registration timed out; retry scheduled"
+                            PushDiagnostics.failure("TDLIB_REGISTER_DEVICE_FAILED", timeout)
+                        } catch (cancelled: CancellationException) { throw cancelled }
+                        catch (failure: Exception) {
+                            mutable.value = "Push registration unavailable; retry scheduled"
+                            PushDiagnostics.failure("TDLIB_REGISTER_DEVICE_FAILED", failure)
+                        }
+                        // One cancellable retry job per authorized account/token/connection. No Activity dependency.
+                        PushDiagnostics.event("TDLIB_REGISTER_DEVICE_RETRY_SCHEDULED delayMs=$backoff")
+                        delay(backoff)
+                        backoff = (backoff * 2).coerceAtMost(300_000L)
+                    }
                 }
         }
         scope.launch(Dispatchers.IO) { initializeFirebase() }
@@ -91,20 +112,19 @@ class TelegramPushRegistration @Inject constructor(@ApplicationContext private v
                 ?: FirebaseApp.initializeApp(context)
             if (firebase == null) {
                 val config = context.assets.open("firebase-client.json").bufferedReader().use { JSONObject(it.readText()) }
-                if (config.length() == 0) { PushDiagnostics.event("Firebase configuration missing"); return }
+                if (config.length() == 0) { mutable.value = "Firebase not configured: add app/google-services.json"; PushDiagnostics.event("FIREBASE_CONFIGURATION_MISSING source=app/google-services.json"); return }
                 firebase = FirebaseApp.initializeApp(context, FirebaseOptions.Builder().setApplicationId(config.getString("applicationId"))
                     .setApiKey(config.getString("apiKey")).setProjectId(config.getString("projectId")).setGcmSenderId(config.getString("senderId")).build())
             }
             PushDiagnostics.event("Firebase initialized")
             FirebaseMessaging.getInstance().apply {
                 isAutoInitEnabled = true
-                token.addOnSuccessListener { token(it) }.addOnFailureListener { mutable.value = "FCM token unavailable"; PushDiagnostics.event("FCM token unavailable") }
+                token.addOnSuccessListener { token(it) }.addOnFailureListener { error -> mutable.value = "FCM token unavailable"; PushDiagnostics.failure("FCM_TOKEN_FAILED", error) }
             }
-        } catch (_: Exception) { mutable.value = "Firebase configuration unavailable"; PushDiagnostics.event("Firebase initialization failed") }
+        } catch (error: Exception) { mutable.value = "Firebase configuration unavailable"; PushDiagnostics.failure("FIREBASE_INITIALIZATION_FAILED", error) }
           catch (_: LinkageError) { mutable.value = "Firebase unavailable"; PushDiagnostics.event("Firebase dependency unavailable") }
     }
-    fun token(value: String) { tokens.value = value; PushDiagnostics.event("FCM token available") }
-    fun foreground() { reconcile.update { it + 1 } }
+    fun token(value: String, refreshed: Boolean = false) { if (value.isBlank()) return; tokens.value = value; PushDiagnostics.event(if (refreshed) "FCM_TOKEN_REFRESHED" else "FCM_TOKEN_AVAILABLE") }
     suspend fun target(receiver: Long): Long? = withContext(Dispatchers.IO) {
         val current = storage.getLong("current", 0).takeIf { it != 0L } ?: return@withContext null
         if (receiver == 0L) return@withContext current

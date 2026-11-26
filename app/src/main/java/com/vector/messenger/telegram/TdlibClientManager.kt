@@ -49,6 +49,7 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
     private val callTypes = setOf("updateCall", "updateNewCallSignalingData")
     private val callEvents = Channel<AvatarEnvelope>(Channel.UNLIMITED)
     private val restoringCallUpdates = ArrayDeque<JSONObject>()
+    private val restoringNotificationUpdates = ArrayDeque<JSONObject>()
     internal val callUpdates = callEvents.receiveAsFlow().filter { it.epoch == sessionEpoch && authorized }.map { it.value }
     private val contactLibraryTypes = setOf("updateNewMessage", "updateDeleteMessages", "updateMessageContent", "updateUser", "updateUserFullInfo", "updateChatNotificationSettings")
     private val contactLibraryEvents = OrderedUpdateRelay<AvatarEnvelope>(scope, context, { sessionEpoch }, { authorized })
@@ -165,7 +166,7 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                             }
                             "updateConnectionState" -> {
                                 val next = mapProfileConnection(json.optJSONObject("state") ?: JSONObject())
-                                if (next != connectionState.value) com.vector.messenger.notifications.PushDiagnostics.event("TDLib connection=${next.name}")
+                                if (next != connectionState.value) com.vector.messenger.notifications.PushDiagnostics.event("TDLIB_CONNECTION_STATE state=${next.name}")
                                 if (next != connectionState.value) SessionDiagnostics.mark(context, when (next) {
                                     ProfileConnection.Ready -> SessionEvent.ConnectionReady
                                     ProfileConnection.Updating -> SessionEvent.ConnectionUpdating
@@ -177,7 +178,10 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                         }
                         if (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0 && json.optString("@type") in setOf("updateNewMessage", "updateActiveNotifications", "updateNotificationGroup"))
                             android.util.Log.d("DefaultNotificationTrace", "TDLib received ${json.optString("@type")} authorized=$authorized")
-                        if (json.optString("@type") in notificationTypes && (authorized || json.optString("@type") in pushNotificationTypes)) notificationEvents.send(NotificationEnvelope(sessionEpoch, json))
+                        if (json.optString("@type") in notificationTypes) {
+                            if (authorized) notificationEvents.send(NotificationEnvelope(sessionEpoch, json))
+                            else if (json.optString("@type") in pushNotificationTypes) restoringNotificationUpdates.addLast(json)
+                        }
                         if (authorized && json.optString("@type") in messagingTypes) messagingEvents.send(MessagingEnvelope(sessionEpoch, json))
                         if (authorized && json.optString("@type") in mediaTypes) mediaEvents.emit(json)
                         if (authorized && json.optString("@type") in activityTypes) activityEvents.emit(AvatarEnvelope(sessionEpoch, json))
@@ -197,12 +201,18 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
                             actionTargets.clear()
                             while (messagingEvents.tryReceive().isSuccess) { /* Discard prior-session account data. */ }
                         }
-                        if (auth.optString("@type") in setOf("authorizationStateWaitPhoneNumber", "authorizationStateLoggingOut", "authorizationStateClosed")) restoringCallUpdates.clear()
+                        if (auth.optString("@type") in setOf("authorizationStateWaitPhoneNumber", "authorizationStateLoggingOut", "authorizationStateClosed")) {
+                            restoringCallUpdates.clear()
+                            restoringNotificationUpdates.clear()
+                        }
                         when (auth.optString("@type")) {
                             "authorizationStateLoggingOut" -> { logoutConfirmed = true; events.send(AuthStep.LoggingOut) }
                             "authorizationStateReady" -> {
                                 logoutConfirmed = false
                                 SessionDiagnostics.mark(context, SessionEvent.AuthorizationReady)
+                                // Early active/push notifications belong to this restored database. Bind them
+                                // to the ready session, not intermediate authorization-state epochs.
+                                while (restoringNotificationUpdates.isNotEmpty()) notificationEvents.send(NotificationEnvelope(sessionEpoch, restoringNotificationUpdates.removeFirst()))
                                 while (restoringCallUpdates.isNotEmpty()) callEvents.send(AvatarEnvelope(sessionEpoch, restoringCallUpdates.removeFirst()))
                                 events.send(AuthStep.Ready)
                             }
@@ -263,6 +273,8 @@ class TdlibClientManager(private val context: Context, private val scope: Corout
             try {
                 telegramNetworkChanges(context).collect { hint ->
                     if (clientId != client) return@collect
+                    com.vector.messenger.notifications.PushDiagnostics.network(hint.type, hint.validated)
+                    com.vector.messenger.notifications.PushDiagnostics.event("ANDROID_NETWORK_CHANGED")
                     SessionDiagnostics.mark(context, SessionEvent.NetworkChanged)
                     try {
                         val result = send(request("setNetworkType", "type" to request(hint.type)))

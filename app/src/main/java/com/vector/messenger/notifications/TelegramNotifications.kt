@@ -72,7 +72,7 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
         set(value) {
             if (field == value) return
             field = value
-            if (value) { activeConversation?.let { dismissConversation(it) }; pushRegistration.foreground() }
+            if (value) { activeConversation?.let { dismissConversation(it) } }
         }
     var activeConversation: ConversationIdentity? = null
         set(value) {
@@ -91,7 +91,6 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
         started = true
         pushRegistration.start()
         trace("notification implementation started")
-        scope.launch { profile.state.collect { trace("profile=$it") } }
         scope.launch(Dispatchers.IO) {
           try {
             listOf(Triple("messages_v1", "Messages", NotificationManager.IMPORTANCE_DEFAULT),
@@ -113,6 +112,7 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
                     try { clearNative() }
                     catch (_: Exception) { diagnostic("Native notification cleanup failed") }
                 }
+                PushDiagnostics.account(id)
                 owner = id ?: 0; account.value = owner; pending.value = false
                 groups.clear(); chats.clear(); scopes.clear(); senders.clear(); senderPhotos.clear(); senderPhotoFiles.clear(); senderChats.clear()
                 dismissedThrough.clear(); readThrough.clear(); renderVersions.clear(); photos.clear(); photoFiles.clear(); thumbnailRequests.clear(); posted.clear(); notices.clear(); replies.clear(); replyResults.clear()
@@ -143,7 +143,7 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
         if (context.applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE != 0) android.util.Log.d("DefaultNotificationTrace", message)
     }
     private fun diagnostic(message: String) { android.util.Log.w("DefaultNotifications", message) }
-    fun token(value: String) = pushRegistration.token(value)
+    fun token(value: String, refreshed: Boolean = false) = pushRegistration.token(value, refreshed)
     fun accept(intent: Intent?) {
         if (intent?.action != "com.vector.messenger.OPEN_CONVERSATION") return
         val account = intent.getLongExtra("account", 0); val chat = intent.getLongExtra("chat", 0)
@@ -231,6 +231,8 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
     private fun isSupported(type: JSONObject?) = type?.optString("@type") in setOf("notificationGroupTypeMessages", "notificationGroupTypeMentions")
     private suspend fun reduce(value: JSONObject) {
         calls.callNotification(value)
+        if (value.optString("@type") in setOf("updateNotificationGroup", "updateNotification", "updateActiveNotifications", "updateHavePendingNotifications"))
+            PushDiagnostics.event("TDLIB_NOTIFICATION_RECEIVED type=${value.optString("@type")}", pushCorrelation ?: "session")
         when (value.optString("@type")) {
             "updateHavePendingNotifications" -> pending.value = value.optBoolean("have_delayed_notifications") || value.optBoolean("have_unreceived_notifications")
             "updateActiveNotifications" -> {
@@ -351,7 +353,14 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
         if (viewing(chatId, account)) { trace("suppress: active conversation"); dismissConversation(identity(chatId, account), forceNativeCancel = false); return }
         val selected = groups.values.filter { it.chat == chatId && it.count > 0 }
         val prefs = preferences.state.value
-        if (selected.isEmpty() || !prefs.enabled || !NotificationManagerCompat.from(context).areNotificationsEnabled()) { trace("skip: groups=${selected.size} enabled=${prefs.enabled} permission=${NotificationManagerCompat.from(context).areNotificationsEnabled()}"); cancel(chatId); return }
+        if (selected.isEmpty() || !prefs.enabled || !NotificationManagerCompat.from(context).areNotificationsEnabled()) {
+            PushDiagnostics.event("ANDROID_NOTIFICATION_SUPPRESSED reason=" + when {
+                selected.isEmpty() -> "noActiveGroup"
+                !prefs.enabled -> "disabledInApp"
+                else -> "androidPermissionDenied"
+            }, pushCorrelation ?: "session")
+            cancel(chatId); return
+        }
         val chat = chats[chatId] ?: optional(request("getChat", "chat_id" to chatId), 3_000)?.also { chats[chatId] = it }
         if (account != owner) return
         val type = chat?.optJSONObject("type")
@@ -428,7 +437,7 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
         if (viewing(chatId, account)) { trace("suppress: active conversation"); dismissConversation(identity(chatId, account), forceNativeCancel = false); return }
         NotificationManagerCompat.from(context).notify(tag(chatId), 1, builder.build()); posted += chatId
         trace("posted conversation notification: count=${messages.size} previews=$visible")
-        PushDiagnostics.event("Android notification posted", pushCorrelation ?: "session")
+        PushDiagnostics.event("ANDROID_NOTIFICATION_POSTED channelImportance=${system.getNotificationChannel(channel)?.importance ?: -1}", pushCorrelation ?: "session")
         if (visible && avatar == null) chat?.optJSONObject("photo")?.optJSONObject("small")?.let { file ->
             val photo = manager.messagingPhoto(file)
             if (photo != null) {
@@ -534,10 +543,10 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
         val target = pushRegistration.target(receiver)
         if (target == null) { PushDiagnostics.event("push receiver unavailable for current session", correlation); return@withContext true }
         PushDiagnostics.event("push receiver resolved", correlation)
-        PushDiagnostics.event("push processing started", correlation)
+        PushDiagnostics.event("TDLIB_PUSH_PROCESSING_STARTED", correlation)
         val response = withTimeoutOrNull(25_000) { manager.processNotificationPush(payload, target) } ?: return@withContext false
         if (response.optString("@type") == "error" && response.optInt("code") != 406) {
-            PushDiagnostics.event("TDLib push processing rejected", correlation); return@withContext false
+            PushDiagnostics.telegramFailure("TDLIB_PUSH_PROCESSING_FAILED", response, correlation); return@withContext false
         }
         // Native push updates are buffered until the shared authenticated account is available.
         val account = awaitAccount() ?: return@withContext false
@@ -550,7 +559,7 @@ class TelegramNotifications @Inject constructor(@ApplicationContext private val 
         withTimeoutOrNull(15_000) { pending.first { !it } } ?: return@withContext false
         manager.flushNotificationUpdates()
         if (!calls.awaitBackgroundCall()) return@withContext false
-        PushDiagnostics.event("push processing completed", correlation)
+        PushDiagnostics.event("TDLIB_PUSH_PROCESSING_COMPLETED", correlation)
         true
         } finally { pushCorrelation = null }
     } }

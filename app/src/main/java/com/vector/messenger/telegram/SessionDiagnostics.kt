@@ -23,6 +23,13 @@ internal object SessionDiagnostics {
     private var freshVisit = -1L
     private var created = 0
     @Synchronized fun mark(context: Context, event: SessionEvent, waitMs: Long = 0) {
+        when (event) {
+            SessionEvent.AppForegrounded -> com.vector.messenger.notifications.PushDiagnostics.lifecycle(true)
+            SessionEvent.AppBackgrounded -> com.vector.messenger.notifications.PushDiagnostics.lifecycle(false)
+            SessionEvent.ClientCreated -> com.vector.messenger.notifications.PushDiagnostics.event("TDLIB_CLIENT_CREATED")
+            SessionEvent.ClientClosed -> com.vector.messenger.notifications.PushDiagnostics.event("TDLIB_CLIENT_CLOSED")
+            else -> Unit
+        }
         if (context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE == 0) return
         val now = SystemClock.elapsedRealtime()
         if (event == SessionEvent.ClientCreated) created++

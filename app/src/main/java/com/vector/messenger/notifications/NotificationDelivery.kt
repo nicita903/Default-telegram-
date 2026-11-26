@@ -152,12 +152,12 @@ class NotificationActionReceiver : BroadcastReceiver() {
 }
 
 class DefaultPushService : FirebaseMessagingService() {
-    override fun onNewToken(token: String) { notifications(this).token(token) }
+    override fun onNewToken(token: String) { notifications(this).token(token, refreshed = true) }
     override fun onMessageReceived(message: RemoteMessage) {
         val event = "push:${message.messageId ?: UUID.randomUUID()}"
         val correlation = NotificationWork.correlation(event).take(12)
         val high = message.priority == RemoteMessage.PRIORITY_HIGH
-        PushDiagnostics.event("FCM push received priorityHigh=$high", correlation)
+        PushDiagnostics.event("FCM_MESSAGE_RECEIVED priorityHigh=$high", correlation)
         try {
             val payload = JSONObject(message.data as Map<*, *>).put("google.sent_time", message.sentTime)
             message.notification?.sound?.let { payload.put("google.notification.sound", it) }
