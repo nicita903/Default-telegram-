@@ -176,7 +176,7 @@ fun ContactsScreen(contacts: List<Chat>, onSelect: (Long) -> Unit) {
                 TelegramAvatar(contact.title, contact.photo, 44.dp, contact.userId ?: contact.id, user = contact.userId != null)
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(contact.title, style = MaterialTheme.typography.titleMedium, color = colors.text)
-                    Text("Sample contact", style = MaterialTheme.typography.bodySmall, color = colors.secondary)
+                    Text(if (contact.userId != null) "Telegram contact" else if (!contact.isContact) "Group members" else "Contact", style = MaterialTheme.typography.bodySmall, color = colors.secondary)
                 }
             }
             DefaultRule(Modifier.padding(start = 76.dp))

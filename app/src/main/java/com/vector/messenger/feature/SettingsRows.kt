@@ -11,6 +11,7 @@ import androidx.compose.foundation.selection.selectableGroup
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlin.math.roundToInt
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material3.*
@@ -31,10 +32,10 @@ import com.vector.messenger.navigation.gesture.excludeModuleGestures
 internal val LocalSettingsHighlight = staticCompositionLocalOf { "" }
 
 @Composable
-internal fun CompactSettingsRow(title: String, value: String = "", icon: ImageVector = VectorIcons.Views,
+internal fun CompactSettingsRow(title: String, value: String = "", icon: ImageVector = SettingsIcons.Controls,
     subtitle: String? = null, checked: Boolean? = null, enabled: Boolean = true, chevron: Boolean = checked == null,
     selected: Boolean = false, highlighted: Boolean = LocalSettingsHighlight.current == title,
-    leading: (@Composable () -> Unit)? = null, onClick: () -> Unit) {
+    leading: (@Composable () -> Unit)? = null, subtitleLines: Int = 1, onClick: () -> Unit) {
     val colors = DefaultDesign.colors
     val appearance = LocalAppearance.current
     val haptic = LocalHapticFeedback.current
@@ -49,23 +50,23 @@ internal fun CompactSettingsRow(title: String, value: String = "", icon: ImageVe
         interactionSource = interaction, indication = null, onValueChange = { click() })
         else Modifier.clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClick = click)
     Row(Modifier.fillMaxWidth().heightIn(min = 56.dp).excludeModuleGestures()
-        .graphicsLayer { scaleX = scale; scaleY = scale }.background(fill)
+        .graphicsLayer { scaleX = scale; scaleY = scale }.clip(RoundedCornerShape(14.dp)).background(fill)
         .then(action).semantics(mergeDescendants = true) { if (value.isNotEmpty()) stateDescription = value else if (selected) stateDescription = "Selected" }
         .padding(horizontal = 4.dp, vertical = 8.dp), verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp)) {
         if (leading != null) leading() else DesignIcon(icon, null, Modifier.size(20.dp), tint = if (selected) colors.accent else colors.secondary)
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(title, color = if (enabled) colors.text else colors.secondary, style = MaterialTheme.typography.bodyMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            if (subtitle != null) Text(subtitle, color = colors.secondary, style = MaterialTheme.typography.labelSmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (subtitle != null) Text(subtitle, color = colors.secondary, style = MaterialTheme.typography.labelSmall, maxLines = subtitleLines, overflow = TextOverflow.Ellipsis)
         }
         if (value.isNotEmpty()) Text(value, Modifier.widthIn(max = 120.dp), color = if (checked == true || selected) colors.accent else colors.secondary,
             style = MaterialTheme.typography.labelMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
         if (checked != null) {
             val fraction by animateFloatAsState(if (checked) 1f else 0f, VectorMotionSpec.transition(appearance), label = "Setting toggle")
-            Canvas(Modifier.size(26.dp, 16.dp)) {
-                drawRoundRect(colors.secondary.copy(alpha = .15f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2))
-                drawCircle(if (checked) colors.accent else colors.secondary, radius = 5.dp.toPx(),
-                    center = androidx.compose.ui.geometry.Offset(7.dp.toPx() + 12.dp.toPx() * fraction, size.height / 2))
+            Canvas(Modifier.size(32.dp, 20.dp)) {
+                drawRoundRect(if (checked) colors.accent.copy(alpha = .23f) else colors.secondary.copy(alpha = .15f), cornerRadius = androidx.compose.ui.geometry.CornerRadius(size.height / 2))
+                drawCircle(if (checked) colors.accent else colors.secondary, radius = 6.dp.toPx(),
+                    center = androidx.compose.ui.geometry.Offset(10.dp.toPx() + 12.dp.toPx() * fraction, size.height / 2))
             }
         } else if (selected) DesignIcon(VectorIcons.Check, null, Modifier.size(18.dp), tint = colors.accent)
         else if (chevron) DesignIcon(Icons.AutoMirrored.Filled.KeyboardArrowRight, null, Modifier.size(18.dp), tint = colors.secondary)
@@ -74,22 +75,28 @@ internal fun CompactSettingsRow(title: String, value: String = "", icon: ImageVe
 
 @Composable
 internal fun SettingsHeading(title: String) {
-    Text(title.uppercase(), Modifier.padding(top = 20.dp, bottom = 4.dp).semantics { heading() },
+    Text(title.uppercase(), Modifier.padding(top = 22.dp, bottom = 8.dp).semantics { heading() },
         color = DefaultDesign.colors.secondary, style = MaterialTheme.typography.labelSmall)
 }
 
 @Composable
 internal fun SettingsSegments(title: String, options: List<String>, selected: Int, onSelect: (Int) -> Unit) {
     val colors = DefaultDesign.colors
+    val appearance = LocalAppearance.current
     Column(Modifier.fillMaxWidth().excludeModuleGestures().padding(vertical = 8.dp)) {
-        Text(title, color = colors.text, style = MaterialTheme.typography.bodyMedium)
-        Row(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        if (title.isNotEmpty()) Text(title, color = colors.text, style = MaterialTheme.typography.bodyMedium)
+        BoxWithConstraints(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+        val cell = maxWidth / options.size.coerceAtLeast(1)
+        val position by androidx.compose.animation.core.animateDpAsState(cell * selected.coerceAtLeast(0),
+            androidx.compose.animation.core.tween(VectorMotionSpec.duration(200, appearance)), label = "Setting selection position")
+        Box(Modifier.matchParentSize()) {
+            Box(Modifier.offset(x = position).width(cell).fillMaxHeight().clip(RoundedCornerShape(14.dp)).background(colors.accent.copy(alpha = .13f)))
+        }
+        Row(Modifier.fillMaxWidth().selectableGroup()) {
             options.forEachIndexed { index, label ->
-                val fill by animateColorAsState(if (index == selected) colors.accent.copy(alpha = .16f) else Color.Transparent,
-                    VectorMotionSpec.transition(LocalAppearance.current), label = "Setting selection")
                 val haptic = LocalHapticFeedback.current
                 val enabledHaptic = LocalAppearance.current.haptics
-                Box(Modifier.weight(1f).heightIn(min = 48.dp).clip(CircleShape).background(fill)
+                Box(Modifier.weight(1f).heightIn(min = 48.dp).clip(RoundedCornerShape(14.dp))
                     .selectable(index == selected, role = Role.RadioButton) {
                         if (enabledHaptic) haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
                         onSelect(index)
@@ -99,6 +106,7 @@ internal fun SettingsSegments(title: String, options: List<String>, selected: In
                         maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
             }
+        }
         }
     }
 }
@@ -147,9 +155,11 @@ internal fun SettingsAccountRow(onProfile: () -> Unit) {
     val state by avatars.ownProfile.collectAsStateWithLifecycle()
     val profile = state.profile?.takeIf { state.authenticated }
     val account = com.vector.messenger.feature.avatar.LocalAccountAction.current
-    if (profile == null) CompactSettingsRow("Telegram account", "Sign in", icon = VectorIcons.Views, onClick = account)
-    else CompactSettingsRow(profile.displayName, subtitle = profile.username?.let { "@$it" } ?: "Telegram account",
-        leading = { com.vector.messenger.feature.avatar.OwnAccountAvatar(48.dp) }, onClick = onProfile)
+    Box(Modifier.padding(vertical = 10.dp)) {
+        if (profile == null) CompactSettingsRow("My Profile", "Sign in", icon = SettingsIcons.User, onClick = account)
+        else CompactSettingsRow(profile.displayName, subtitle = profile.username?.let { "@$it" } ?: "My Profile",
+            leading = { com.vector.messenger.feature.avatar.OwnAccountAvatar(52.dp) }, onClick = onProfile)
+    }
 }
 
 @Composable
@@ -159,7 +169,22 @@ internal fun SettingsStoragePanel(viewModel: PreferencesViewModel) {
     LaunchedEffect(Unit) { viewModel.refreshStorage() }
     fun size(value: Long?) = value?.let { android.text.format.Formatter.formatFileSize(context, it) } ?: if (state.loading) "Measuring…" else "Unavailable"
     Column(Modifier.fillMaxWidth()) {
-        SettingsHeading("Usage")
+        SettingsHeading("Telegram storage")
+        val media = state.telegramBytes
+        val database = state.databaseBytes
+        if (media != null && database != null) {
+            Text(size(media + database), color = DefaultDesign.colors.text, style = MaterialTheme.typography.headlineLarge,
+                modifier = Modifier.padding(top = 8.dp, bottom = 16.dp))
+            val total = media + database
+            Row(Modifier.fillMaxWidth().height(6.dp).clip(CircleShape).background(DefaultDesign.colors.raised)
+                .semantics { contentDescription = "Telegram storage usage"; stateDescription = "Media ${size(media)}, database ${size(database)}" }) {
+                if (total > 0) {
+                    if (media > 0) Box(Modifier.weight((media.toDouble() / total).toFloat().coerceAtLeast(.001f)).fillMaxHeight().background(DefaultDesign.colors.accent))
+                    if (database > 0) Box(Modifier.weight((database.toDouble() / total).toFloat().coerceAtLeast(.001f)).fillMaxHeight().background(DefaultDesign.colors.secondary.copy(alpha = .45f)))
+                }
+            }
+            Spacer(Modifier.height(12.dp))
+        }
         listOf("App disk cache" to state.cacheBytes, "Telegram media" to state.telegramBytes, "Telegram database" to state.databaseBytes).forEach { (label, bytes) ->
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).background(if (LocalSettingsHighlight.current == label) DefaultDesign.colors.accent.copy(alpha = .08f) else Color.Transparent),
                 verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -169,6 +194,5 @@ internal fun SettingsStoragePanel(viewModel: PreferencesViewModel) {
         }
         state.error?.let { Text(it, color = DefaultDesign.colors.secondary, style = MaterialTheme.typography.bodySmall) }
         CompactSettingsRow("Refresh storage usage", icon = VectorIcons.Refresh, chevron = false, enabled = !state.loading) { viewModel.refreshStorage() }
-        Text("Usage is read-only. Manage downloaded media below.", color = DefaultDesign.colors.secondary, style = MaterialTheme.typography.bodySmall)
     }
 }

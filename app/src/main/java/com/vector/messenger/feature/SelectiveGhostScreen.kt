@@ -41,8 +41,8 @@ internal fun SelectiveGhostScreen(state: GhostState, enabled: (Boolean) -> Unit,
     }
     LazyColumn(Modifier.fillMaxSize().testTag("privacy_scroll"), state = listState, contentPadding = PaddingValues(20.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
         item {
-            Text("Ghost Mode", color = if (highlighted == "ghost") DefaultDesign.colors.accent else DefaultDesign.colors.text, style = MaterialTheme.typography.headlineSmall)
-            PreferenceToggle("Enable local suppression", state.saved.enabled, editable, enabled)
+            SettingsHeading("Activity filters")
+            PreferenceToggle("Ghost Mode", state.saved.enabled, editable, enabled)
             Text(if (!state.initialized && state.error != null) "Local filters · Failed" else if (!state.initialized || state.operation == GhostOperation.Saving) "Local filters · Applying" else if (state.saved.enabled) "Local filters · Enabled" else "Local filters · Disabled",
                 style = MaterialTheme.typography.labelSmall, color = DefaultDesign.colors.accent)
         }
@@ -56,8 +56,7 @@ internal fun SelectiveGhostScreen(state: GhostState, enabled: (Boolean) -> Unit,
                 state.confirmed -> "Selected exceptions confirmed by Telegram"
                 else -> "Server changes · Disabled · press Apply to commit"
             }, style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.secondary)
-            Text("Local filters and Telegram privacy are independent. Apply commits requested exceptions. Clear a requested exclusion or remove a contact, then Apply to restore managed server rules.",
-                style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.secondary)
+            SettingsExplanation("How exceptions work", "Local filters and Telegram privacy are independent. Apply commits requested exceptions. Clear a requested exclusion or remove a contact, then Apply to restore managed server rules.")
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 DefaultAction("Refresh privacy", refresh, enabled = !state.busy)
                 DefaultAction("Apply privacy changes", applyPrivacy, enabled = editable && !state.conflict && !state.confirmed)
@@ -70,7 +69,7 @@ internal fun SelectiveGhostScreen(state: GhostState, enabled: (Boolean) -> Unit,
             state.serverError?.takeIf { it != state.error }?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.accent) }
         }
         item {
-            DefaultRule()
+            Spacer(Modifier.height(12.dp))
             DefaultInput(query, { query = it }, "Search Telegram contacts", Modifier.fillMaxWidth().excludeModuleGestures(), leadingIcon = Icons.Default.Search)
             Text("Selected · ${state.saved.contacts.size}", style = MaterialTheme.typography.titleMedium)
             if (state.saved.contacts.isEmpty()) Text("No contacts selected", style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.secondary)
@@ -97,7 +96,7 @@ internal fun SelectiveGhostScreen(state: GhostState, enabled: (Boolean) -> Unit,
             }
         }
         item {
-            DefaultRule()
+            Spacer(Modifier.height(12.dp))
             Text("Telegram contacts", style = MaterialTheme.typography.titleMedium)
         }
         items(available, key = { "contact:${it.id}" }, contentType = { "available_contact" }) { contact ->
@@ -112,12 +111,7 @@ internal fun SelectiveGhostScreen(state: GhostState, enabled: (Boolean) -> Unit,
         }
         if (available.isEmpty()) item { Text("No matching unselected contacts", style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.secondary) }
         item {
-            DefaultRule()
-            Text("Read reporting · Enabled (normal)", style = MaterialTheme.typography.bodySmall)
-            Text("Hide all read receipts · Unsupported", style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.secondary)
-            Text("Visible messages are reported as read normally. No optional read-deferral mode is implemented. Last Seen & Online exclusions do not disable read receipts.", style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.secondary)
-            Text("No complete invisibility. Sending or reading messages can briefly expose online activity, including in shared groups. Premium does not bypass explicit exclusions or remove these exceptions.", style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.secondary)
-            Text("Local indicator suppression covers direct chats in Default, not other clients or shared-group activity. Voice recording actions pass through this filter; actual voice uploads remain enabled. Typing broadcasts and video recording are not implemented. Logging out does not restore server privacy rules.", style = MaterialTheme.typography.bodySmall, color = DefaultDesign.colors.secondary)
+            SettingsExplanation("What Ghost Mode can hide", "Visible messages are still reported as read. Last-seen exclusions do not hide read receipts. Sending or reading messages can briefly expose online activity, including in shared groups. Premium does not bypass explicit exclusions. Local indicator suppression covers direct chats in Default, not other clients or shared groups. Voice recording actions pass through the filter; voice uploads remain enabled. Typing broadcasts and video recording are not implemented. Logging out does not restore server privacy rules.")
         }
     }
 }

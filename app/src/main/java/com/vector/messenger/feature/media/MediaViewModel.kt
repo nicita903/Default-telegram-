@@ -13,7 +13,10 @@ val LocalMediaViewModel = staticCompositionLocalOf<MediaViewModel?> { null }
 data class MediaPresentation(val session: Long = 0, val file: MediaFile? = null, val thumbnail: MediaFile? = null)
 
 @HiltViewModel
-class MediaViewModel @Inject constructor(private val repository: MediaRepository) : ViewModel() {
+class MediaViewModel internal constructor(private val repository: MediaRepository,
+    private val automaticAllowed: suspend (MediaItem) -> Boolean = { false }) : ViewModel() {
+    @Inject constructor(repository: MediaRepository, telegramSettings: com.vector.messenger.feature.TelegramSettingsRepository,
+        @dagger.hilt.android.qualifiers.ApplicationContext appContext: Context) : this(repository, { telegramSettings.allowAutomatic(it, appContext) })
     val state = repository.state
     private val errorState = MutableStateFlow<String?>(null)
     val error = errorState.asStateFlow()
@@ -28,6 +31,11 @@ class MediaViewModel @Inject constructor(private val repository: MediaRepository
     }.distinctUntilChanged()
     fun download(item: MediaItem) { errorState.value = null; repository.request(item) }
     fun preview(item: MediaItem) = repository.request(item, managed = false, priority = 1)
+    suspend fun automatic(item: MediaItem) {
+        if (repository.state.value.downloads.any { it.item.media.file.id == item.media.file.id && it.phase in listOf(DownloadPhase.Paused, DownloadPhase.Failed) }) return
+        val session = repository.state.value.session
+        if (automaticAllowed(item) && repository.state.value.session == session) repository.request(item, managed = false, priority = 1)
+    }
     fun pause(id: Int) = repository.pause(id)
     fun remove(id: Int) = repository.remove(id)
     fun external(context: Context, item: MediaItem, share: Boolean) {

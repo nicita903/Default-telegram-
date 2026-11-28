@@ -35,8 +35,9 @@ import dagger.hilt.android.AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     @javax.inject.Inject lateinit var sounds: com.vector.messenger.sound.DefaultSounds
     @javax.inject.Inject lateinit var notifications: com.vector.messenger.notifications.TelegramNotifications
-    override fun onStart() { super.onStart(); notifications.foreground = true; sounds.foreground(true) }
-    override fun onStop() { notifications.foreground = false; sounds.foreground(false); super.onStop() }
+    @javax.inject.Inject lateinit var appLock: com.vector.messenger.feature.AppPasscode
+    override fun onStart() { super.onStart(); appLock.foreground(); notifications.foreground = true; sounds.foreground(true) }
+    override fun onStop() { if (!isChangingConfigurations) appLock.background(); notifications.foreground = false; sounds.foreground(false); super.onStop() }
     private val chats: ChatsViewModel by viewModels()
     private val preferences: PreferencesViewModel by viewModels()
     private val authentication: AuthenticationViewModel by viewModels()
@@ -102,6 +103,8 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         val account = authentication // Starts/restores the process-owned Telegram session asynchronously.
         setContent {
+            val lockState by appLock.state.collectAsStateWithLifecycle()
+            if (lockState.enabled) com.vector.messenger.feature.SecureSettingsWindow()
             val appearance by preferences.appearance.collectAsStateWithLifecycle()
             val videoRecording by videoNotes.state.collectAsStateWithLifecycle()
             val recording by voice.state.collectAsStateWithLifecycle()
@@ -129,6 +132,11 @@ class MainActivity : ComponentActivity() {
                 com.vector.messenger.feature.avatar.LocalAccountAction provides { accountOpen = true },
                 com.vector.messenger.feature.music.LocalMusicViewModel provides music) {
             DefaultTheme {
+                if (lockState.locked) {
+                    com.vector.messenger.feature.AppUnlockScreen(appLock)
+                    // Calling remains available over the gate; no chat or account navigation is composed.
+                    com.vector.messenger.calling.VoiceCallHost()
+                } else {
                 DefaultApp(chats, preferences, search, onAccount = { accountOpen = true }, notificationHost = notifications, soundHost = sounds)
                 com.vector.messenger.feature.audio.AudioLifecycle()
                 com.vector.messenger.feature.music.NowPlayingHost()
@@ -136,6 +144,7 @@ class MainActivity : ComponentActivity() {
                 androidx.compose.runtime.LaunchedEffect(Unit) { if (intent.getBooleanExtra("open_music_player", false)) music.openPlayer() }
                 if (accountOpen) AuthenticationDialog(account, profile, onClose = { accountOpen = false })
                 com.vector.messenger.feature.avatar.AvatarHost(avatars, chats)
+                }
             }
             }
         }

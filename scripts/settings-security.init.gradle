@@ -1,0 +1,9 @@
+// Explicit opt-in: compile only the isolated settings security instrumentation fixture.
+// Older UI fixtures use obsolete constructors; they are outside this verification task.
+gradle.projectsEvaluated {
+    def app = gradle.rootProject.project(':app')
+    app.android.sourceSets.androidTest.java.setSrcDirs(['src/androidTest/java/com/vector/messenger/feature'])
+    app.tasks.matching { it.name == 'compileDebugAndroidTestKotlin' }.configureEach {
+        setSource(app.fileTree('src/androidTest/java/com/vector/messenger/feature') { include '**/*.kt' })
+    }
+}

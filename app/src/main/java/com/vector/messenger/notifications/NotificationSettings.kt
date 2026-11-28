@@ -22,6 +22,7 @@ import com.vector.messenger.design.DefaultDialog
 import com.vector.messenger.design.VectorIcons
 import com.vector.messenger.feature.CompactSettingsRow
 import com.vector.messenger.feature.SettingsHeading
+import com.vector.messenger.feature.SettingsIcons
 
 @Composable
 fun NotificationSettings(viewModel: PreferencesViewModel) {
@@ -34,16 +35,17 @@ fun NotificationSettings(viewModel: PreferencesViewModel) {
         permitted = NotificationManagerCompat.from(context).areNotificationsEnabled()
     }
     LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { permitted = NotificationManagerCompat.from(context).areNotificationsEnabled() }
-    SettingsHeading("Delivery preferences")
-    PreferenceToggle("Enable notifications", value.enabled) { enabled ->
+    SettingsHeading("On this device")
+    PreferenceToggle("Message notifications", value.enabled) { enabled ->
         viewModel.notificationPreference { it.copy(enabled = enabled) }
         if (enabled && Build.VERSION.SDK_INT >= 33 && ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED && !viewModel.notificationPermissionAsked) rationale = true
     }
-    PreferenceToggle("Hide message content and identity", value.hideContent) { hide -> viewModel.notificationPreference { it.copy(hideContent = hide) } }
-    PreferenceToggle("Group notifications", value.groups) { groups -> viewModel.notificationPreference { it.copy(groups = groups) } }
+    PreferenceToggle("Message previews", !value.hideContent) { show -> viewModel.notificationPreference { it.copy(hideContent = !show) } }
+    PreferenceToggle("Group alerts", value.groups) { groups -> viewModel.notificationPreference { it.copy(groups = groups) } }
     if (!permitted && Build.VERSION.SDK_INT >= 33 && !viewModel.notificationPermissionAsked) CompactSettingsRow("Allow notifications", icon = VectorIcons.Check) { rationale = true }
-    Text(if (permitted) "Sounds, vibration and lock-screen visibility are managed by Android." else "Android notifications are off. Messaging continues normally.", style = MaterialTheme.typography.bodySmall)
-    CompactSettingsRow("Android notification settings", if (permitted) "Allowed" else "Off", VectorIcons.Views) {
+    SettingsHeading("System")
+    if (!permitted) Text("Android notifications are off.", style = MaterialTheme.typography.bodySmall)
+    CompactSettingsRow("Android notification settings", if (permitted) "Allowed" else "Off", SettingsIcons.Bell) {
         try { context.startActivity(Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)) }
         catch (_: Exception) { systemError = "Android notification settings are unavailable in this profile." }
     }

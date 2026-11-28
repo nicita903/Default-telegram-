@@ -230,6 +230,9 @@ fun DefaultApp(chats: ChatsViewModel, preferences: PreferencesViewModel, search:
                                     if (profileOpen) "Back from profile" else if (searchVisible) "Close search" else if (conversation && displayedModule == AppModule.Contacts) "Back to contacts" else if (conversation) "Back to chats" else "Back within module",
                                     { if (searchVisible) closeSearch() else if (profileOpen) profileBack() else nav.popBackStack() },
                                     Modifier.excludeModuleGestures(), quiet = true)
+                            } else if (displayedModule == AppModule.Settings && !profileOpen) {
+                                DefaultIconControl(Icons.AutoMirrored.Filled.ArrowBack, "Back from settings", { previousModule() },
+                                    Modifier.excludeModuleGestures(), quiet = true)
                             } else {
                                 DefaultIconControl(Icons.Default.Menu, "Open navigation", { menu = true },
                                     Modifier.excludeModuleGestures(), quiet = true)

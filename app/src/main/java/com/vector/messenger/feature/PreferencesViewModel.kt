@@ -17,6 +17,8 @@ class PreferencesViewModel @Inject constructor(
     private val notificationStore: com.vector.messenger.notifications.NotificationPreferenceStore,
     private val soundStore: com.vector.messenger.sound.SoundPreferences,
     private val storageRepository: SettingsStorageRepository,
+    val telegram: TelegramSettingsRepository,
+    val appLock: AppPasscode,
 ) : ViewModel() {
     val storage = storageRepository.state
     fun refreshStorage() = storageRepository.refresh()

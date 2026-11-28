@@ -40,33 +40,27 @@ object SettingsRoutes {
     const val Category = "settings/category/{section}?focus={focus}"
     fun category(section: String, focus: String = "") = "settings/category/$section?focus=$focus"
     fun title(section: String) = when (section) {
-        "appearance" -> "Appearance"; "motion" -> "Interface & Motion"; "messaging" -> "Messaging"
-        "sounds" -> "Messaging"; "notifications" -> "Notifications"; "privacy" -> "Privacy & security"
+        "appearance" -> "Appearance"; "motion" -> "Motion & Gestures"; "messaging" -> "Chats"
+        "sounds" -> "Sounds"; "notifications" -> "Alerts"; "privacy" -> "Privacy"
         "calling" -> "Calls"; "music" -> "Music"; "storage" -> "Storage"; "about" -> "About Default"
-        else -> "Settings"
+        "devices" -> "Devices"
+        "tg_notifications" -> "Alerts"
+        else -> telegramSettingLinks.firstOrNull { it.route == section }?.title ?: "Settings"
     }
 }
 private data class SettingEntry(val id: String, val title: String, val section: String, val icon: ImageVector,
     val keywords: String = "", val value: String = "", val checked: Boolean? = null, val options: List<String> = emptyList(),
     val selected: Int = -1, val choose: ((Int) -> Unit)? = null, val action: (() -> Unit)? = null,
-    val destination: String? = null, val home: String? = null, val searchOnly: Boolean = false, val info: String? = null)
+    val destination: String? = null, val home: String? = null, val searchOnly: Boolean = false, val info: String? = null, val indexed: Boolean = true)
 
-private data class SettingsModule(val id: String, val title: String, val subtitle: String, val group: String, val icon: ImageVector)
-private val settingsModules = listOf(
-    SettingsModule("appearance", "Appearance", "Themes, colors, AMOLED, typography", "Personalization", Icons.Default.Settings),
-    SettingsModule("motion", "Interface & Motion", "Gestures, blur, animations, haptics", "Personalization", VectorIcons.Clock),
-    SettingsModule("messaging", "Messaging", "Message sounds and media behavior", "Communication", VectorIcons.Chat),
-    SettingsModule("notifications", "Notifications", "Permissions, previews, sound and vibration", "Communication", Icons.Default.Notifications),
-    SettingsModule("calling", "Calls", "Ringtone, Telegram privacy and verification", "Communication", CallIcons.Phone),
-    SettingsModule("privacy", "Privacy & Security", "Telegram visibility and local Ghost Mode", "Privacy & data", VectorIcons.Views),
-    SettingsModule("storage", "Storage", "Actual usage and downloaded media", "Privacy & data", VectorIcons.Download),
-    SettingsModule("music", "Music", "Playback preferences", "Modules", VectorIcons.Music),
-)
+private val featuredSettings = listOf("appearance" to "Appearance", "privacy" to "Privacy", "sounds" to "Sounds", "notifications" to "Alerts")
+private val secondarySettings = listOf("messaging" to "Chats", "calling" to "Calls", "devices" to "Devices", "storage" to "Storage", "music" to "Music")
 private fun settingGroup(entry: SettingEntry) = when (entry.section) {
-    "appearance" -> when (entry.id) { "interface" -> "Interface"; "accent" -> "Accent color"; "typography" -> "Typography"; "about" -> "Application"; else -> "Display" }
+    "appearance" -> when (entry.id) { "interface" -> "Interface"; "accent" -> "Accent"; "typography" -> "Text"; "about" -> "Application"; "motion_link" -> "Interaction"; else -> "Display" }
     "motion" -> when (entry.id) { "speed", "intensity", "reduced" -> "Motion"; "blur" -> "Glass effects"; "haptic", "interface_sound" -> "Feedback"; else -> "Gestures" }
-    "messaging" -> if (entry.id == "video_autoplay") "Media" else "In-app sounds"
-    "calling" -> when (entry.id) { "verification" -> "Security"; "call_effects" -> "Sounds"; "call_proximity" -> "Proximity"; else -> "Incoming calls" }
+    "messaging" -> "Media"
+    "sounds" -> when (entry.id) { "ringtone", "ring_volume", "call_effects" -> "Calls"; "haptics_link" -> "Feedback"; else -> "In app" }
+    "calling" -> when (entry.id) { "verification" -> "Security"; "call_proximity" -> "Audio"; "call_sounds_link" -> "Sounds"; else -> "Incoming calls" }
     "notifications" -> "Android notification channels"
     "music" -> "Playback"
     "storage" -> "Management"
@@ -77,9 +71,10 @@ private fun settingGroup(entry: SettingEntry) = when (entry.section) {
 private fun SettingsControl(entry: SettingEntry, open: (SettingEntry) -> Unit) {
     when {
         entry.id == "accent" -> SettingsColorSelector(entry.selected) { entry.choose?.invoke(it) }
-        entry.id in listOf("interface", "density", "repeat") -> SettingsSegments(entry.title, entry.options, entry.selected) { entry.choose?.invoke(it) }
+        entry.id in listOf("interface", "density", "repeat") -> SettingsSegments(if (entry.id == "interface") "" else entry.title, entry.options, entry.selected) { entry.choose?.invoke(it) }
         entry.options.size > 1 -> SettingsValueSlider(entry.title, entry.value, entry.selected, entry.options.size) { entry.choose?.invoke(it) }
-        else -> CompactSettingsRow(entry.title, entry.value, entry.icon, checked = entry.checked) { open(entry) }
+        else -> CompactSettingsRow(entry.title, entry.value, entry.icon, checked = entry.checked,
+            leading = if (entry.checked != null) ({}) else null) { open(entry) }
     }
 }
 
@@ -87,7 +82,7 @@ private fun SettingsControl(entry: SettingEntry, open: (SettingEntry) -> Unit) {
 @Composable
 fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit, onDownloads: () -> Unit,
     onNavigate: (String) -> Unit, onProfile: () -> Unit, page: String = "home", focus: String = "") {
-    val currentPage = if (page == "sounds") "messaging" else page
+    val currentPage = page
     val appearance by viewModel.appearance.collectAsStateWithLifecycle()
     val sounds by viewModel.sounds.collectAsStateWithLifecycle()
     val notifications by viewModel.notifications.collectAsStateWithLifecycle()
@@ -123,12 +118,15 @@ fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit, onDow
         .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName).putExtra(Settings.EXTRA_CHANNEL_ID, id))
     val entries = remember(appearance, sounds, notifications, callSettings, proximitySupported, calls, ghost.authenticated, musicOptions, autoplay, permitted, ringtone, fullScreen, music, video) {
         buildList {
+            telegramSettingLinks.forEach { link -> add(SettingEntry(link.route, link.title,
+                when { link.route == "devices" -> "devices"; link.route == "tg_downloads" -> "messaging"; link.group == "Notifications" -> "notifications"; link.group == "Storage" -> "storage"; else -> "privacy" },
+                SettingsIcons.route(link.route), link.words, destination = link.route, searchOnly = true)) }
             fun nav(id: String, title: String, section: String, icon: ImageVector, value: String = "", home: String? = null, keywords: String = "") {
                 add(SettingEntry(id, title, section, icon, keywords, value, destination = section, home = home))
             }
             fun toggle(id: String, title: String, section: String, value: Boolean, keywords: String = "", home: String? = null, change: (Boolean) -> Unit) {
-                add(SettingEntry(id, title, section, if (section == "sounds") VectorIcons.Music else VectorIcons.Views,
-                    keywords, if (value) "On" else "Off", checked = value, action = { change(!value) }, home = home))
+                add(SettingEntry(id, title, section, SettingsIcons.route(section),
+                    keywords, checked = value, action = { change(!value) }, home = home))
             }
             fun choice(id: String, title: String, section: String, value: Int, options: List<Int>, unit: String = "", names: List<String>? = null,
                 home: String? = null, keywords: String = "", change: (Int) -> Unit) {
@@ -143,7 +141,7 @@ fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit, onDow
             toggle("amoled", "AMOLED mode", "appearance", appearance.amoledBlack, "black dark background oled", "Appearance") { viewModel.appearance { p -> p.copy(amoledBlack = it) } }
             choice("accent", "Accent color", "appearance", appearance.accent, listOf(0,1,2), names = listOf("Aurora blue", "Violet", "Teal"), home = "Appearance", keywords = "electric blue colour") { viewModel.appearance { p -> p.copy(accent = it) } }
             choice("blur", "Blur Intensity", "motion", appearance.glassBlur, listOf(0,1,2,3), names = listOf("Off", "Low", "Medium", "High"), home = "Appearance", keywords = "glass diffusion transparency") { viewModel.appearance { p -> p.copy(glassBlur = it) } }
-            choice("typography", "Typography scale", "appearance", appearance.typeScale, listOf(85,100,115,130), "%", home = "Appearance", keywords = "font text size accessibility") { viewModel.appearance { p -> p.copy(typeScale = it) } }
+            choice("typography", "Text size", "appearance", appearance.typeScale, listOf(85,100,115,130), "%", home = "Appearance", keywords = "typography scale font text size accessibility") { viewModel.appearance { p -> p.copy(typeScale = it) } }
             choice("density", "Interface density", "appearance", if (appearance.compact) 0 else 1, listOf(0,1), names = listOf("Compact", "Comfortable"), keywords = "spacing layout") { viewModel.appearance { p -> p.copy(compact = it == 0) } }
             choice("speed", "Animation speed", "motion", appearance.speed, listOf(50,75,100,125,150), "%") { viewModel.appearance { p -> p.copy(speed = it) } }
             choice("intensity", "Animation intensity", "motion", appearance.intensity, listOf(0,25,50,75,100), "%") { viewModel.appearance { p -> p.copy(intensity = it) } }
@@ -162,36 +160,38 @@ fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit, onDow
             toggle("lock_visible", "Lock indicator visibility", "motion", appearance.lockVisible) { viewModel.appearance { p -> p.copy(lockVisible = it) } }
             toggle("lock_feedback", "Lock feedback", "motion", appearance.elastic, "resistance elastic") { viewModel.appearance { p -> p.copy(elastic = it) } }
             if (video != null) toggle("video_autoplay", "Autoplay cached video circles", "messaging", autoplay, "video notes") { video.autoplay(it) }
-            toggle("message_sounds", "Message sounds", "messaging", sounds.messages) { viewModel.soundPreference { p -> p.copy(messages = it) } }
-            toggle("send_sound", "Send sound", "messaging", sounds.send) { viewModel.soundPreference { p -> p.copy(send = it) } }
-            toggle("receive_sound", "Receive sound", "messaging", sounds.receive) { viewModel.soundPreference { p -> p.copy(receive = it) } }
-            toggle("error_sound", "Failed message sound", "messaging", sounds.errors) { viewModel.soundPreference { p -> p.copy(errors = it) } }
-            toggle("interface_sound", "Interface sounds", "motion", sounds.interfaceSounds) { viewModel.soundPreference { p -> p.copy(interfaceSounds = it) } }
-            choice("volume", "Sound volume", "messaging", sounds.volume, (0..100 step 5).toList(), "%") { viewModel.soundPreference { p -> p.copy(volume = it) } }
-            listOf("notification_enabled" to "Enable notifications", "notification_previews" to "Hide message content and identity", "notification_groups" to "Group notifications", "notification_access" to "Android notification settings").forEach { (id,title) ->
-                add(SettingEntry(id,title,"notifications",Icons.Default.Notifications, "permissions previews privacy alerts sound", searchOnly = true))
+            toggle("message_sounds", "Message sounds", "sounds", sounds.messages) { viewModel.soundPreference { p -> p.copy(messages = it) } }
+            toggle("send_sound", "Sent messages", "sounds", sounds.send, "send sound messaging") { viewModel.soundPreference { p -> p.copy(send = it) } }
+            toggle("receive_sound", "Received messages", "sounds", sounds.receive, "receive sound messaging") { viewModel.soundPreference { p -> p.copy(receive = it) } }
+            toggle("error_sound", "Failed messages", "sounds", sounds.errors, "failed message sound errors messaging") { viewModel.soundPreference { p -> p.copy(errors = it) } }
+            toggle("interface_sound", "Interface sounds", "sounds", sounds.interfaceSounds) { viewModel.soundPreference { p -> p.copy(interfaceSounds = it) } }
+            choice("volume", "Volume", "sounds", sounds.volume, (0..100 step 5).toList(), "%", keywords = "sound volume messaging") { viewModel.soundPreference { p -> p.copy(volume = it) } }
+            listOf("notification_enabled" to "Message notifications", "notification_previews" to "Message previews", "notification_groups" to "Group alerts", "notification_access" to "Android notification settings").forEach { (id,title) ->
+                val aliases = when (id) {
+                    "notification_enabled" -> "enable notifications delivery permissions"
+                    "notification_previews" -> "hide message content and identity preview privacy"
+                    "notification_groups" -> "group notifications"
+                    else -> "android system permissions sound vibration"
+                }
+                add(SettingEntry(id,title,"notifications",SettingsIcons.Bell, "notifications alerts $aliases", searchOnly = true))
             }
             listOf("Messages" to "messages_v1", "Groups" to "groups_v1", "Mentions" to "mentions_v1").forEach { (name,id) ->
                 add(SettingEntry(id,"$name notification sound","notifications",VectorIcons.Music,"ringtone vibration android channel", "Android", action = { channel(id) }))
             }
-            if (ghost.authenticated) add(SettingEntry("ghost","Ghost Mode","privacy",VectorIcons.Views,"telegram last seen online typing recording privacy security contacts",
-                if (ghost.authenticated) "Telegram" else "Demo", searchOnly = true))
-            if (ghost.authenticated) add(SettingEntry("online","Last Seen & Online","privacy",VectorIcons.Views,"telegram privacy visibility exceptions contacts", searchOnly = true))
-            if (ghost.authenticated) add(SettingEntry("call_privacy","Peer-to-peer call privacy","calling",CallIcons.Phone,"telegram relay ip privacy",searchOnly = true))
             add(SettingEntry("verification", "Encryption verification", "calling", VectorIcons.Check, "four emoji security key fingerprint", info =
                 "During an active Telegram voice call, compare the four emojis below the call duration with the other participant, in the same order. Tap the emojis for details. Opening that explanation does not automatically verify the participant's identity."))
             if (calls != null) {
-                toggle("call_effects", "Call sound effects", "calling", callSettings.effects, "ringback connecting busy disconnect") {
+                toggle("call_effects", "Call sounds", "sounds", callSettings.effects, "call sound effects ringback connecting busy disconnect") {
                     calls.settings.update { p -> p.copy(effects = it) }
                 }
                 if (proximitySupported) toggle("call_proximity", "Proximity during earpiece calls", "calling", callSettings.proximity, "sensor screen ear display") {
                     calls.settings.update { p -> p.copy(proximity = it) }
                 }
             }
-            add(SettingEntry("ring_volume", "Ringtone volume", "calling", VectorIcons.Music, "system ring volume silent do not disturb",
+            add(SettingEntry("ring_volume", "Ringtone volume", "sounds", SettingsIcons.Speaker, "system ring volume silent do not disturb",
                 "Android", action = { openAndroid(Intent(Settings.ACTION_SOUND_SETTINGS)) }))
-            add(SettingEntry("ringtone","Incoming call ringtone","calling",VectorIcons.Music,"voice ring sound",ringtone,action = { channel("telegram_incoming_calls_v1") }))
-            if (Build.VERSION.SDK_INT >= 34) add(SettingEntry("full_screen","Lock-screen call display","calling",VectorIcons.Views,"full screen incoming notifications", if (fullScreen) "Allowed" else "Restricted",action = {
+            add(SettingEntry("ringtone","Ringtone","sounds",CallIcons.Phone,"incoming call ringtone voice ring sound",ringtone,action = { channel("telegram_incoming_calls_v1") }))
+            if (Build.VERSION.SDK_INT >= 34) add(SettingEntry("full_screen","Lock-screen calls","calling",SettingsIcons.Lock,"lock-screen call display full screen incoming notifications", if (fullScreen) "Allowed" else "Restricted",action = {
                 openAndroid(Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT,Uri.parse("package:${context.packageName}"))) }))
             if (music != null) {
                 toggle("shuffle","Shuffle","music",musicOptions.first) { music.player.shuffle() }
@@ -205,6 +205,9 @@ fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit, onDow
                     options = speeds.map { "$it×" }, selected = speeds.indexOf(musicOptions.third), choose = { music.player.speed(speeds[it]) }))
             }
             add(SettingEntry("downloads","Downloads","storage",VectorIcons.Download,"files media storage",action = onDownloads, home = "Storage"))
+            add(SettingEntry("motion_link", "Motion & Gestures", "appearance", SettingsIcons.Controls, "interface animation blur haptic feedback", destination = "motion"))
+            add(SettingEntry("haptics_link", "Haptics", "sounds", SettingsIcons.Controls, action = { onNavigate(SettingsRoutes.category("motion", "haptic")) }, indexed = false))
+            add(SettingEntry("call_sounds_link", "Ringtone & call sounds", "calling", SettingsIcons.Speaker, action = { onNavigate(SettingsRoutes.category("sounds", "ringtone")) }, indexed = false))
             add(SettingEntry("about","About Default","appearance",Icons.Default.Info,"version account encryption",destination = "about"))
             listOf("cache" to "App disk cache", "telegram_media" to "Telegram media", "database" to "Telegram database").forEach { (id,title) ->
                 if (id == "cache" || ghost.authenticated) add(SettingEntry(id,title,"storage",VectorIcons.Download,"storage usage size bytes",searchOnly = true))
@@ -224,7 +227,7 @@ fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit, onDow
     val list = rememberLazyListState()
     var highlight by remember(focus) { mutableStateOf(focus) }
     val category = remember(entries,currentPage) {
-        val groupOrder = listOf("Interface", "Display", "Accent color", "Typography", "Application", "Motion", "Glass effects", "Gestures", "Feedback", "Media", "In-app sounds", "Incoming calls", "Security", "Android notification channels", "Playback", "Management", "Preferences")
+        val groupOrder = listOf("Interface", "Display", "Accent", "Text", "Interaction", "Application", "Motion", "Glass effects", "Gestures", "In app", "Calls", "Feedback", "Media", "Sounds", "Incoming calls", "Audio", "Security", "Android notification channels", "Playback", "Management", "Preferences")
         entries.filter { it.section == currentPage && !it.searchOnly && it.destination != currentPage }
             .sortedBy { groupOrder.indexOf(settingGroup(it)) }
     }
@@ -241,20 +244,24 @@ fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit, onDow
     LaunchedEffect(page, focus) {
         if (focus.isNotEmpty()) {
             val index = categoryItems.indexOfFirst { it.first == focus }
-            list.scrollToItem(if (index >= 0) index + 1 + (if (currentPage in listOf("calling", "notifications", "storage", "motion")) 1 else 0) else 0)
+            list.scrollToItem(if (index >= 0) index + 1 + (if (currentPage in listOf("calling", "notifications", "storage", "messaging")) 1 else 0) else 0)
             delay(1200); highlight = ""
         }
     }
     val targetTitle = entries.firstOrNull { it.id == highlight }?.title.orEmpty()
     CompositionLocalProvider(LocalSettingsHighlight provides targetTitle) {
         if (currentPage == "privacy") {
+            TelegramPrivacyIndex(onNavigate)
+        } else if (currentPage == "tg_ghost") {
             PrivacyScreen(emptyList(), viewModel, focus = focus)
+        } else if (currentPage.startsWith("tg_") || currentPage == "devices") {
+            TelegramSettingsPage(currentPage, viewModel, onNavigate)
         } else if (currentPage == "search") {
             val requester = remember { FocusRequester() }
             LaunchedEffect(Unit) { requester.requestFocus(); keyboard?.show() }
             val results = remember(entries,query) {
                 val words = query.trim().split(Regex("\\s+")).filter(String::isNotEmpty)
-                entries.filter { entry -> words.all { word -> "${entry.title} ${SettingsRoutes.title(entry.section)} ${entry.keywords}".contains(word,true) } }
+                entries.filter { entry -> entry.indexed && words.all { word -> "${entry.title} ${SettingsRoutes.title(entry.section)} ${entry.keywords}".contains(word,true) } }
             }
             Column(Modifier.fillMaxSize().excludeModuleGestures().padding(horizontal = 20.dp)) {
                 DefaultInput(query,{query=it},"Search settings…",Modifier.fillMaxWidth().focusRequester(requester), leadingIcon = Icons.Default.Search,
@@ -270,31 +277,46 @@ fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit, onDow
         } else LazyColumn(Modifier.fillMaxSize().padding(horizontal=20.dp).testTag("settings_scroll"),state=list,contentPadding=PaddingValues(bottom=28.dp)) {
             if (currentPage == "home") {
                 item("account") { SettingsAccountRow(onProfile) }
-                settingsModules.groupBy { it.group }.forEach { (group, modules) ->
-                    item("heading:$group") { SettingsHeading(group) }
-                    items(modules, key = { "module:${it.id}" }) { module ->
-                        CompactSettingsRow(module.title, icon = module.icon, subtitle = module.subtitle) {
-                            onNavigate(SettingsRoutes.category(module.id))
+                featuredSettings.chunked(2).forEachIndexed { row, modules ->
+                    item("featured:$row") {
+                        Row(Modifier.fillMaxWidth().padding(top = if (row == 0) 20.dp else 12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            modules.forEach { (id, title) -> SettingsModuleTile(title, SettingsIcons.route(id), Modifier.weight(1f), accent = id == "appearance") { onNavigate(SettingsRoutes.category(id)) } }
                         }
                     }
                 }
-            } else {
-                item("scope") {
-                    SettingsHeading(if (currentPage in listOf("privacy","calling")) { if (ghost.authenticated) "Telegram · current account" else "Telegram · sign-in required" } else "Application · this device")
+                item("secondary_space") { Spacer(Modifier.height(18.dp)) }
+                items(secondarySettings, key = { "module:${it.first}" }) { (id, title) ->
+                    CompactSettingsRow(title, icon = SettingsIcons.route(id)) { onNavigate(SettingsRoutes.category(id)) }
                 }
-                if (currentPage == "notifications") item("notification_preferences") { com.vector.messenger.notifications.NotificationSettings(viewModel) }
+            } else {
+                item("scope") { Spacer(Modifier.height(4.dp)) }
+                if (currentPage == "notifications") item("notification_preferences") {
+                    SettingsHeading("Messages")
+                    listOf("private" to "Private chats", "groups" to "Groups", "channels" to "Channels").forEach { (scope, title) ->
+                        CompactSettingsRow(title, icon = if (scope == "private") VectorIcons.Chat else SettingsIcons.Group) { onNavigate(SettingsRoutes.category("tg_notifications_$scope")) }
+                    }
+                    com.vector.messenger.notifications.NotificationSettings(viewModel)
+                }
                 if (currentPage == "calling") item("call_privacy_controls") {
-                    if (ghost.authenticated) CallPrivacySettings()
+                    SettingsHeading("Privacy")
+                    if (ghost.authenticated) {
+                        CompactSettingsRow("Who Can Call Me", icon = CallIcons.Phone) { onNavigate(SettingsRoutes.category("tg_privacy_calls")) }
+                        CompactSettingsRow("Peer-to-Peer Calls", icon = CallIcons.Phone) { onNavigate(SettingsRoutes.category("tg_privacy_p2p")) }
+                    }
                     else {
                         Text("Sign in to configure Telegram call privacy.",color=DefaultDesign.colors.secondary,style=MaterialTheme.typography.bodySmall)
                         val account = LocalAccountAction.current
-                        CompactSettingsRow("Telegram account",icon=VectorIcons.Views,onClick=account)
+                        CompactSettingsRow("Telegram account",icon=SettingsIcons.User,onClick=account)
                     }
                 }
-                if (currentPage == "storage") item("storage_usage") { SettingsStoragePanel(viewModel) }
-                if (currentPage == "motion") item("assignments") {
-                    Text("Right + hold → Module menu\nLeft + hold → Previous module\nPull down at the top of Chats → Search",
-                        color=DefaultDesign.colors.secondary,style=MaterialTheme.typography.bodySmall)
+                if (currentPage == "storage") item("storage_usage") {
+                    SettingsStoragePanel(viewModel)
+                    CompactSettingsRow("Cache", icon = SettingsIcons.Storage) { onNavigate(SettingsRoutes.category("tg_cache")) }
+                    CompactSettingsRow("Automatic downloads", icon = VectorIcons.Download) { onNavigate(SettingsRoutes.category("tg_downloads")) }
+                }
+                if (currentPage == "messaging") item("automatic_downloads") {
+                    SettingsHeading("Downloads")
+                    CompactSettingsRow("Automatic downloads", icon = VectorIcons.Download) { onNavigate(SettingsRoutes.category("tg_downloads")) }
                 }
                 items(categoryItems, key = { it.first }) { (key, entry) ->
                     if (entry == null) SettingsHeading(key.removePrefix("heading:"))
@@ -302,8 +324,8 @@ fun SettingsScreen(viewModel: PreferencesViewModel, onPrivacy: () -> Unit, onDow
                         SettingsControl(entry, ::open)
                     }
                 }
-                if (currentPage == "messaging") item("sound_note") { Text("In-app sounds respect silent mode, Do Not Disturb, calls, recording and music playback. Notification sounds are under Notifications.",color=DefaultDesign.colors.secondary,style=MaterialTheme.typography.bodySmall) }
-                if (currentPage == "motion") item("navigation_note") { Text("The module menu and Search remain available through accessible buttons when gestures are disabled.",color=DefaultDesign.colors.secondary,style=MaterialTheme.typography.bodySmall) }
+                if (currentPage == "sounds") item("sound_note") { SettingsExplanation("About sounds", "In-app sounds respect silent mode, Do Not Disturb, calls, recording and music playback. Message notification sounds are under Alerts.") }
+                if (currentPage == "motion") item("navigation_note") { SettingsExplanation("Gesture guide", "Right + hold opens the module menu. Left + hold returns to the previous module. Pull down at the top of Chats to search. The menu and Search buttons remain available with gestures disabled.") }
                 if (currentPage == "about") item("about_info") {
                     val version = remember(context) { context.packageManager.getPackageInfo(context.packageName,0).versionName.orEmpty() }
                     Text("Default · $version",style=MaterialTheme.typography.titleMedium,color=DefaultDesign.colors.text)

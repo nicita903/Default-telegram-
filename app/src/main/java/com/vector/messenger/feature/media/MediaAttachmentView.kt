@@ -45,6 +45,7 @@ fun MediaAttachmentView(item: MediaItem, viewModel: MediaViewModel, onOpen: () -
         if (thumb != null) viewModel.preview(item.copy(media = item.media.copy(file = thumb, thumbnail = null)))
         // Completed originals are validated/reused without triggering full-size auto-downloads.
         if (item.media.file.complete) viewModel.preview(item)
+        else if (delivery !in listOf(Delivery.Sending, Delivery.Failed)) viewModel.automatic(item)
     }
     val image by produceState<DecodedMediaImage?>(null, preview?.path, state.session) {
         value = preview?.path?.let { MediaImages.load(it, 512, state.session) }

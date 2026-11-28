@@ -63,5 +63,5 @@ fun PreferenceToggle(title: String, selected: Boolean, onChange: (Boolean) -> Un
 
 @Composable
 fun PreferenceToggle(title: String, selected: Boolean, enabled: Boolean, onChange: (Boolean) -> Unit) {
-    CompactSettingsRow(title, if (selected) "On" else "Off", checked = selected, enabled = enabled, chevron = false) { onChange(!selected) }
+    CompactSettingsRow(title, checked = selected, enabled = enabled, chevron = false) { onChange(!selected) }
 }
