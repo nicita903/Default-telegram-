@@ -9,6 +9,7 @@ RATE = 24000
 # duration; (start, length, first frequency, final frequency, amplitude)
 TONES = {
     "call_start": (.17, [(0, .14, 440, 600, .13)]),
+    "call_waiting": (1.80, [(0, .14, 420, 420, .065)]),
     "call_ringback": (3.0, [(0, .85, 440, 440, .09), (0, .85, 480, 480, .07)]),
     "call_connecting": (1.25, [(0, .11, 520, 520, .085), (.22, .11, 520, 520, .065)]),
     "call_connected": (.16, [(0, .13, 600, 800, .10)]),

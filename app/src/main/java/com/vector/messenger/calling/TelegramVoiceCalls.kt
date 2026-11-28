@@ -33,7 +33,7 @@ data class CallSecurityUiState(val callId: Int, val verificationEmojis: List<Str
     val available get() = verificationEmojis.size == 4
     override fun toString() = "CallSecurityUiState([redacted])"
 }
-enum class VoiceCallPhase { Idle, Requesting, Incoming, Ringing, Connecting, Active, Reconnecting, Ending, Ended, Failed }
+enum class VoiceCallPhase { Idle, Requesting, Waiting, Incoming, Ringing, Connecting, Active, Reconnecting, Ending, Ended, Failed }
 data class VoiceCallState(val id: Int = 0, val user: Long = 0, val name: String = "", val phase: VoiceCallPhase = VoiceCallPhase.Idle,
     val muted: Boolean = false, val speaker: Boolean = false, val connectedAt: Long = 0, val error: String? = null, val outgoing: Boolean = false, val video: Boolean = false, val security: CallSecurityUiState? = null, val audioOutput: Int = AudioDeviceInfo.TYPE_UNKNOWN, val audioReady: Boolean = false) {
     override fun toString() = "VoiceCallState([redacted])"
@@ -59,6 +59,8 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
     private var missedShown = false
     private var systemMuted = false
     private var userMuted = false
+    private var appliedMute: Boolean? = null
+    private var pendingSpeaker: Boolean? = null
     private val busyCalls = mutableSetOf<Int>()
     private var hintedCall = 0
     private val uiRequests = MutableStateFlow(0L)
@@ -130,6 +132,7 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
         if (releasing.isNotEmpty() || requestJob?.isActive == true) return
         ending = false; answered = false; declinedLocally = false; missedShown = false; val attemptId = ++attempt
         callDiagnostic(context, CallEvent.Created)
+        callAudioDiagnostic("OUTGOING_CALL_STARTED")
         mutable.value = VoiceCallState(user = user, phase = VoiceCallPhase.Requesting, outgoing = true)
         val token = epoch; val account = owner
         requestJob = scope.launch {
@@ -176,6 +179,8 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
         answered = true
         callDiagnostic(context, CallEvent.AnswerRequested)
         mutable.update { it.copy(phase = VoiceCallPhase.Connecting) }
+        platform.silenceIncoming(key)
+        if (!matches(key)) return
         scope.launch {
             try {
                 val nativeProtocol = protocol()
@@ -204,11 +209,27 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
             androidx.core.telecom.CallEndpointCompat.TYPE_WIRED_HEADSET -> AudioDeviceInfo.TYPE_WIRED_HEADSET
             else -> AudioDeviceInfo.TYPE_UNKNOWN
         }
-        mutable.update { it.copy(audioOutput = output, speaker = output == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER) }
+        val speaker = output == AudioDeviceInfo.TYPE_BUILTIN_SPEAKER
+        if (output != AudioDeviceInfo.TYPE_UNKNOWN && pendingSpeaker == speaker) pendingSpeaker = null
+        mutable.update { it.copy(audioOutput = output, speaker = speaker) }
+    }
+    internal fun speakerRequestFailed() {
+        pendingSpeaker = null
+        mutable.update { it.copy(error = "Android could not select that audio output. The current route is unchanged.") }
     }
     internal fun systemMute(value: Boolean) {
+        if (systemMuted == value) return
         systemMuted = value
-        if (handle != 0L && bridge?.mute(handle, userMuted || systemMuted) == true) mutable.update { it.copy(muted = userMuted || systemMuted) }
+        if (!applyMicrophoneMute()) end("Android microphone mute could not be applied.")
+    }
+    private fun applyMicrophoneMute(): Boolean {
+        val effective = userMuted || systemMuted
+        if (handle != 0L && appliedMute != effective) {
+            if (bridge?.mute(handle, effective) != true) return false
+            appliedMute = effective
+        }
+        mutable.update { it.copy(muted = effective) }
+        return true
     }
     /** UI navigation only: reveal the current call without starting or changing it. */
     fun showCall(user: Long): Boolean {
@@ -267,6 +288,7 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
             else if (!outgoing && value.optJSONObject("state")?.optString("@type") == "callStatePending" && state.value.phase in listOf(VoiceCallPhase.Idle, VoiceCallPhase.Ended, VoiceCallPhase.Failed)) {
                 ending = false; answered = false; declinedLocally = false; missedShown = false; attempt++
                 callDiagnostic(context, CallEvent.IncomingDetected)
+                callAudioDiagnostic("INCOMING_CALL_RECEIVED")
                 callDiagnostic(context, CallEvent.Created)
                 mutable.value = VoiceCallState(id, user, phase = VoiceCallPhase.Incoming, video = value.optBoolean("is_video"),
                     error = if (value.optBoolean("is_video")) "Video calling is not supported. You can decline this call." else null)
@@ -291,7 +313,14 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
         }
         val remote = value.getJSONObject("state")
         when (remote.optString("@type")) {
-            "callStatePending" -> if (outgoing && !ending) mutable.update { it.copy(phase = if (remote.optBoolean("is_received")) VoiceCallPhase.Ringing else VoiceCallPhase.Requesting) }
+            "callStatePending" -> if (outgoing && !ending) {
+                if (remote.optBoolean("is_received") && state.value.phase != VoiceCallPhase.Ringing) callAudioDiagnostic("REMOTE_RINGING_DETECTED", "source=TDLib.is_received")
+                mutable.update { it.copy(phase = when {
+                remote.optBoolean("is_received") -> VoiceCallPhase.Ringing
+                remote.optBoolean("is_created") -> VoiceCallPhase.Waiting
+                else -> VoiceCallPhase.Requesting
+            }) }
+            }
             "callStateExchangingKeys" -> if (!ending) mutable.update { it.copy(phase = VoiceCallPhase.Connecting) }
             "callStateReady" -> if (!ending && handle == 0L && mediaJob?.isActive != true) {
                 if (value.optBoolean("is_video")) { end("Video calls are not supported in this phase."); return }
@@ -372,7 +401,11 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
                 .put("p2p", ready.optBoolean("allow_p2p") && remote.optBoolean("udp_p2p"))
                 .put("layer", minOf(remote.getInt("max_layer"), engine.capabilities.getInt("layer"))).put("custom", ready.optString("custom_parameters"))
                 .put("connectTimeout", connect).put("packetTimeout", packet))
-            if (systemMuted || userMuted) { if (engine.mute(handle, true)) mutable.update { it.copy(muted = true) } }
+            appliedMute = false // Newly created tgcalls sessions start unmuted.
+            if (!applyMicrophoneMute()) {
+                end("Unable to apply the requested microphone mute.")
+                return
+            }
             startSignaling(handle, callId, account, token)
             callDiagnostic(context, CallEvent.EngineInitialized)
             mutable.update { it.copy(security = it.security?.copy(stage = CallSecurityStage.MediaInitialized)) }
@@ -405,15 +438,23 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
             } finally { bytes.fill(0) }
         }
     }
+    private fun controlsAvailable() = !ending && state.value.phase in listOf(VoiceCallPhase.Requesting,
+        VoiceCallPhase.Waiting, VoiceCallPhase.Ringing, VoiceCallPhase.Connecting, VoiceCallPhase.Active, VoiceCallPhase.Reconnecting)
     fun mute() {
-        if (handle == 0L || ending) return
+        if (!controlsAvailable()) return
         if (systemMuted) { mutable.update { it.copy(error = "Microphone is muted by Android.") }; return }
-        val next = !userMuted
-        if (bridge?.mute(handle, next) == true) { userMuted = next; mutable.update { it.copy(muted = next) } }
+        val old = userMuted
+        userMuted = !userMuted
+        if (!applyMicrophoneMute()) {
+            userMuted = old
+            mutable.update { it.copy(error = "Microphone change was not accepted. Try again.") }
+        }
     }
     fun speaker() {
-        if (!audioOwned || ending) return
-        if (state.value.speaker) platform.privateRoute() else platform.route(androidx.core.telecom.CallEndpointCompat.TYPE_SPEAKER)
+        if (!controlsAvailable()) return
+        val desired = !(pendingSpeaker ?: state.value.speaker)
+        pendingSpeaker = desired
+        platform.requestSpeaker(desired)
     }
     fun bluetooth() {
         if (!audioOwned || ending) return
@@ -458,8 +499,9 @@ class TelegramVoiceCalls @Inject constructor(@ApplicationContext private val con
         try { action() } catch (_: Exception) { callDiagnostic(context, CallEvent.CleanupFailure) }
     }
     private fun release(tone: CallToneEnd? = null, waitingForReason: Boolean = false) {
+        if (state.value.phase !in listOf(VoiceCallPhase.Idle, VoiceCallPhase.Ended, VoiceCallPhase.Failed)) callAudioDiagnostic("CALL_ENDED", "feedback=${tone?.name ?: "none"}")
         if (waitingForReason) sounds.awaitTermination() else if (tone != null) sounds.finish(tone) else sounds.cancel()
-        audioOwned = false; systemMuted = false; userMuted = false
+        audioOwned = false; systemMuted = false; userMuted = false; appliedMute = null; pendingSpeaker = null
         cleanup { platform.close() }
         mediaJob?.cancel(); mediaJob = null
         signalJob?.cancel(); signalJob = null; signals?.cancel(); signals = null

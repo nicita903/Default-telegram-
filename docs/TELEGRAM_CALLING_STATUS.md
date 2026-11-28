@@ -146,3 +146,18 @@ Call-scoped tones, optional earpiece proximity screen-off, Telecom endpoint sele
 preferences are described in [CALLING_EXPERIENCE.md](CALLING_EXPERIENCE.md), including original
 asset provenance, registration preflight and focused device checks. No physical device was connected
 for this update; sounds, sensors and routing are implemented but not physically validated.
+
+
+## Premium calling refinement
+
+See [PREMIUM_CALLING_EXPERIENCE.md](PREMIUM_CALLING_EXPERIENCE.md) for setup Mute/Speaker, distinct
+TDLib Waiting/Ringing sound mapping, incoming alert handling, restrained call-only motion/haptics,
+modified files and the focused physical-device checklist. The user requested checklist-only
+verification; no real-call or hardware success is claimed for this refinement.
+
+
+## Verified ringing and call-screen follow-up
+
+See [CALL_RINGING_FIX.md](CALL_RINGING_FIX.md) for the actual focus/stream corrections, independent
+incoming vibration, soundless full-screen notification channel, physical-device results, final build
+and remaining test limits. Earlier checklist-only verification notes above describe the earlier build.

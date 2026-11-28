@@ -17,6 +17,10 @@ internal object CallIcons {
         moveTo(16f, 8f); curveTo(19f, 10f, 19f, 14f, 16f, 16f)
         moveTo(19f, 5f); curveTo(25f, 9f, 25f, 15f, 19f, 19f)
     } }
+    val SpeakerOff by lazy { icon("Speaker off") {
+        moveTo(3f, 9f); lineTo(7f, 9f); lineTo(12f, 5f); lineTo(12f, 19f); lineTo(7f, 15f); lineTo(3f, 15f); close()
+        moveTo(16f, 9f); lineTo(22f, 15f); moveTo(22f, 9f); lineTo(16f, 15f)
+    } }
     val Bluetooth by lazy { icon("Bluetooth") {
         moveTo(12f, 2f); lineTo(19f, 7f); lineTo(5f, 17f)
         moveTo(5f, 7f); lineTo(19f, 17f); lineTo(12f, 22f); close()

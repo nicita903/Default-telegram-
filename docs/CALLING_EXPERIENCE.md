@@ -1,5 +1,7 @@
 # Call sounds, proximity and routes
 
+Later setup-control, Waiting-tone and call UI refinements: [PREMIUM_CALLING_EXPERIENCE.md](PREMIUM_CALLING_EXPERIENCE.md).
+
 Implementation uses the existing `VoiceCallState`, TDLib reducer, native Established callback,
 AndroidX Core-Telecom session and `VoiceCallService`. No native/JNI, cryptography, authentication,
 database paths or call-screen layout changes are required.

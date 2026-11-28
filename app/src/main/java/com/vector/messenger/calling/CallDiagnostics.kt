@@ -31,3 +31,8 @@ internal fun telecomDiagnostic(context: Context, operation: String, registered: 
         "message=$safeMessage $detail frames=$frames"
     if (error != null || code != null) Log.e("DefaultTelecom", line) else Log.d("DefaultTelecom", line)
 }
+
+/** Fixed audio events and numeric/enum state only: never pass URIs, user identity or error messages. */
+internal fun callAudioDiagnostic(event: String, detail: String = "") {
+    Log.i("DefaultCallAudio", "t=${android.os.SystemClock.elapsedRealtime()} $event $detail")
+}

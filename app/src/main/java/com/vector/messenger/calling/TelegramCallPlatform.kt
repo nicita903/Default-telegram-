@@ -40,7 +40,8 @@ class TelegramCallPlatform @Inject constructor(@ApplicationContext private val c
         const val OPEN = "com.vector.messenger.CALL_OPEN"
         const val ANSWER = "com.vector.messenger.CALL_ANSWER"
         const val END = "com.vector.messenger.CALL_END"
-        private const val RING = "telegram_incoming_calls_v1"
+        internal const val RING = "telegram_incoming_calls_v1"
+        internal const val DISPLAY = "telegram_incoming_call_display_v1"
         private const val ONGOING = "default_voice_calls"
         private const val MISSED = "telegram_missed_calls_v1"
     }
@@ -67,6 +68,7 @@ class TelegramCallPlatform @Inject constructor(@ApplicationContext private val c
     private val registrationLock = Mutex()
     private var entry: Entry? = null
     private var closing: Job? = null
+    private var pendingSpeaker: Boolean? = null
     fun attach(controller: TelegramVoiceCalls) {
         calls = controller; channels()
         scope.launch {
@@ -84,6 +86,11 @@ class TelegramCallPlatform @Inject constructor(@ApplicationContext private val c
         system.createNotificationChannel(NotificationChannel(RING, "Incoming Telegram calls", NotificationManager.IMPORTANCE_HIGH).apply {
             setSound(RingtoneManager.getDefaultUri(RingtoneManager.TYPE_RINGTONE), attrs); enableVibration(true)
             lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+        })
+        // High-importance visual channel without FLAG_SILENT/group suppression. Audio has one app owner.
+        system.createNotificationChannel(NotificationChannel(DISPLAY, "Incoming call screen", NotificationManager.IMPORTANCE_HIGH).apply {
+            setSound(null, null); enableVibration(false); lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+            description = "Incoming call display. Ringtone and vibration follow Calls settings."
         })
         system.createNotificationChannel(NotificationChannel(ONGOING, "Voice calls", NotificationManager.IMPORTANCE_LOW).apply { setSound(null, null) })
         system.createNotificationChannel(NotificationChannel(MISSED, "Missed Telegram calls", NotificationManager.IMPORTANCE_DEFAULT))
@@ -165,7 +172,8 @@ class TelegramCallPlatform @Inject constructor(@ApplicationContext private val c
                                     expected != id && !topologyChanged) value.userRoute = id
                                 calls.telecomEndpoint(endpoint.type)
                                 if (value.userRoute != null && available.none { it.identifier.toString() == value.userRoute }) value.userRoute = null
-                                if (value.userRoute == null && value.routeRequest == null) {
+                                applyPendingSpeaker(value)
+                                if (pendingSpeaker == null && value.userRoute == null && value.routeRequest == null) {
                                     val preferred = privateEndpoint(value) ?: available.firstOrNull { it.type == CallEndpointCompat.TYPE_SPEAKER }
                                     if (preferred != null && preferred.identifier != endpoint.identifier) requestRoute(value, preferred, manual = false)
                                 }
@@ -220,6 +228,23 @@ class TelegramCallPlatform @Inject constructor(@ApplicationContext private val c
     private fun privateEndpoint(value: Entry): CallEndpointCompat? =
         listOf(CallEndpointCompat.TYPE_WIRED_HEADSET, CallEndpointCompat.TYPE_BLUETOOTH, CallEndpointCompat.TYPE_EARPIECE)
             .firstNotNullOfOrNull { type -> value.endpoints.firstOrNull { it.type == type } }
+    internal fun requestSpeaker(enabled: Boolean) {
+        pendingSpeaker = enabled
+        entry?.let { applyPendingSpeaker(it) }
+    }
+    private fun applyPendingSpeaker(value: Entry) {
+        val requested = pendingSpeaker ?: return
+        if (value.control == null || value.routeRequest != null || !current(value.key)) return
+        val target = if (requested) value.endpoints.firstOrNull { it.type == CallEndpointCompat.TYPE_SPEAKER }
+            else value.endpoints.firstOrNull { it.identifier.toString() == value.lastPrivate && it.type != CallEndpointCompat.TYPE_SPEAKER }
+                ?: privateEndpoint(value)
+        if (target == null) {
+            if (value.endpoints.isNotEmpty()) { pendingSpeaker = null; calls.speakerRequestFailed() }
+            return // Wait for real endpoints; never invent an earpiece on speaker-only hardware.
+        }
+        pendingSpeaker = null
+        requestRoute(value, target, manual = true)
+    }
     internal fun privateRoute() {
         val value = entry ?: return
         val endpoint = value.endpoints.firstOrNull { it.identifier.toString() == value.lastPrivate && it.type != CallEndpointCompat.TYPE_SPEAKER }
@@ -239,17 +264,26 @@ class TelegramCallPlatform @Inject constructor(@ApplicationContext private val c
         scope.launch {
             try {
                 if (current(value.key)) when (val result = value.control?.requestEndpointChange(endpoint)) {
-                    is CallControlResult.Error -> { value.expectedRoute = null; diagnose("requestEndpointChange", value, code = result.errorCode) }
+                    is CallControlResult.Error -> {
+                        value.expectedRoute = null
+                        diagnose("requestEndpointChange", value, code = result.errorCode)
+                        if (manual && current(value.key)) calls.speakerRequestFailed()
+                    }
                     is CallControlResult.Success -> if (manual) value.userRoute = id
                     else -> Unit
                 }
             } catch (cancelled: CancellationException) { throw cancelled }
-            catch (error: Exception) { value.expectedRoute = null; diagnose("requestEndpointChange", value, error) }
+            catch (error: Exception) {
+                value.expectedRoute = null; diagnose("requestEndpointChange", value, error)
+                if (manual && current(value.key)) calls.speakerRequestFailed()
+            }
             finally { value.routeRequest = null }
+            if (current(value.key)) applyPendingSpeaker(value)
             // The endpoint flow alone updates the UI; a successful request isn't a route report.
         }
     }
     internal fun close(cause: Int = DisconnectCause.LOCAL) {
+        pendingSpeaker = null
         val old = entry ?: return; entry = null
         old.ready.cancel(); old.avatarJob?.cancel()
         try { system.cancel(ID) } catch (_: Exception) { callDiagnostic(context, CallEvent.PlatformFailure) }
@@ -286,15 +320,20 @@ class TelegramCallPlatform @Inject constructor(@ApplicationContext private val c
         val end = intent(value, END, false)
         val style = if (ringing) NotificationCompat.CallStyle.forIncomingCall(person, end, intent(value, ANSWER, true))
             else NotificationCompat.CallStyle.forOngoingCall(person, end)
-        val builder = NotificationCompat.Builder(context, if (ringing) RING else ONGOING)
+        val builder = NotificationCompat.Builder(context, if (ringing) DISPLAY else ONGOING)
             .setSmallIcon(android.R.drawable.stat_sys_phone_call).setContentTitle(state.name.ifBlank { "Telegram voice call" })
             .setContentText(if (ringing) "Incoming voice call" else when (state.phase) {
                 VoiceCallPhase.Active -> "Voice call in progress"; VoiceCallPhase.Reconnecting -> "Reconnecting…"; else -> "Connecting…" })
             .setStyle(style).setContentIntent(open).setCategory(NotificationCompat.CATEGORY_CALL)
-            .setOngoing(true).setOnlyAlertOnce(true).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setOngoing(true).setOnlyAlertOnce(true).setSilent(!ringing).setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setPriority(NotificationCompat.PRIORITY_MAX)
-        if (ringing && (Build.VERSION.SDK_INT < 34 || system.canUseFullScreenIntent())) builder.setFullScreenIntent(open, true)
-        return builder.build().apply { if (ringing) flags = flags or Notification.FLAG_INSISTENT }
+        val fullScreen = Build.VERSION.SDK_INT < 34 || system.canUseFullScreenIntent()
+        if (ringing) {
+            callAudioDiagnostic("CALL_SCREEN_PRESENTATION", "fullScreenAllowed=$fullScreen locked=${context.getSystemService(KeyguardManager::class.java).isKeyguardLocked} interactive=${context.getSystemService(android.os.PowerManager::class.java).isInteractive}")
+            if (fullScreen) builder.setFullScreenIntent(open, true)
+        }
+        // CallSoundController owns incoming ringtone/vibration; notification playback is always silent.
+        return builder.build()
     }
     internal fun foregroundStarted(attempt: Long) {
         val value = entry?.takeIf { it.key.attempt == attempt && current(it.key) } ?: return
@@ -315,14 +354,20 @@ class TelegramCallPlatform @Inject constructor(@ApplicationContext private val c
         if (!current(value.key) || !value.foreground) return
         // Never cancel the foreground notification while changing incoming/ongoing style.
         val newlyRinging = !value.ringing && state.phase == VoiceCallPhase.Incoming
-        value.ringing = state.phase == VoiceCallPhase.Incoming
         try {
             system.notify(ID, notification(value, state))
+            value.ringing = state.phase == VoiceCallPhase.Incoming
             if (newlyRinging) callDiagnostic(context, CallEvent.IncomingPosted)
         } catch (error: Exception) {
             diagnose("updateCallNotification", value, error)
             if (current(value.key)) calls.end("Android could not maintain the call notification.")
         }
+    }
+    internal fun silenceIncoming(key: PlatformCall) {
+        val value = entry?.takeIf { it.key == key && current(key) } ?: return
+        calls.sounds.stopIncomingCall()
+        // Keep the visible notification in sync; it never owns ringtone audio.
+        post(value, calls.state.value.copy(phase = VoiceCallPhase.Connecting))
     }
     internal fun foregroundNotification(): Notification? = entry?.takeIf { current(it.key) }?.let { notification(it, calls.state.value) }
     internal fun refreshIdentity(key: PlatformCall) {

@@ -1,6 +1,8 @@
 package com.vector.messenger.calling
 
 import android.Manifest
+import android.app.NotificationManager
+import android.view.HapticFeedbackConstants
 import android.content.pm.PackageManager
 import android.media.AudioDeviceCallback
 import android.media.AudioDeviceInfo
@@ -35,6 +37,8 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.semantics.*
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.Dp
@@ -97,6 +101,23 @@ fun VoiceCallHost() {
         if (state.connectedAt <= 0) value = 0
         else if (running) while (true) { value = (SystemClock.elapsedRealtime() - state.connectedAt) / 1000; delay(1000) }
     }
+    val avatarPulse = remember { Animatable(1f) }
+    var confirmedConnection by rememberSaveable { mutableStateOf<String?>(null) }
+    val connectionKey = "${state.id}:${state.user}:${state.connectedAt}"
+    LaunchedEffect(connectionKey, foreground, minimized, settings.reducedMotion) {
+        avatarPulse.snapTo(1f)
+        if (state.connectedAt > 0 && !terminal && confirmedConnection != connectionKey) {
+            confirmedConnection = connectionKey
+            if (foreground && !minimized && state.phase == VoiceCallPhase.Active && VectorMotionSpec.strength(settings) > 0) {
+                avatarPulse.animateTo(1f + .015f * VectorMotionSpec.strength(settings), tween(VectorMotionSpec.duration(100, settings)))
+                avatarPulse.animateTo(1f, tween(VectorMotionSpec.duration(180, settings), easing = FastOutSlowInEasing))
+            }
+        }
+    }
+    val breathing: State<Float> = if (foreground && !minimized && state.phase == VoiceCallPhase.Incoming && VectorMotionSpec.strength(settings) > 0) {
+        rememberInfiniteTransition(label = "Incoming avatar").animateFloat(1f, 1f + .018f * VectorMotionSpec.strength(settings),
+            infiniteRepeatable(tween(VectorMotionSpec.duration(1800, settings), easing = FastOutSlowInEasing), RepeatMode.Reverse), label = "Avatar breathing")
+    } else rememberUpdatedState(1f)
     val status = if (state.phase == VoiceCallPhase.Active) callTime(seconds) else callStatus(state.phase)
     if (minimized) {
         if (!terminal) FloatingCallIndicator(state, if (state.connectedAt > 0) callTime(seconds) else status) { minimized = false }
@@ -111,7 +132,8 @@ fun VoiceCallHost() {
         AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "Earpiece"
         else -> "System audio output"
     }
-    val controllable = state.phase in listOf(VoiceCallPhase.Active, VoiceCallPhase.Reconnecting)
+    val controllable = state.phase in listOf(VoiceCallPhase.Requesting, VoiceCallPhase.Waiting, VoiceCallPhase.Ringing,
+        VoiceCallPhase.Connecting, VoiceCallPhase.Active, VoiceCallPhase.Reconnecting)
     fun answer() {
         if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) calls.answer()
         else permission.launch(Manifest.permission.RECORD_AUDIO)
@@ -137,24 +159,21 @@ fun VoiceCallHost() {
                     Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
                         horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
-                        var appeared by remember { mutableStateOf(false) }
-                        LaunchedEffect(Unit) { appeared = true }
-                        val avatarScale = animateFloatAsState(if (appeared) 1f else VectorMotionSpec.pressScale(.97f, settings),
-                            VectorMotionSpec.transition(settings), label = "Call avatar entrance")
-                        Box(Modifier.graphicsLayer { scaleX = avatarScale.value; scaleY = avatarScale.value }) {
+                        Box(Modifier.graphicsLayer { scaleX = breathing.value * avatarPulse.value; scaleY = scaleX }) {
                             if (state.user > 0) TelegramAvatar(state.name, null, avatarSize, state.user, true)
                         }
                         Spacer(Modifier.height(if (short) 12.dp else 22.dp))
                         Text(state.name.ifBlank { "Telegram voice call" }, color = DefaultDesign.colors.text,
                             style = MaterialTheme.typography.titleLarge, textAlign = TextAlign.Center)
                         Spacer(Modifier.height(6.dp))
-                        if (state.phase == VoiceCallPhase.Active) Text(callTime(seconds), color = DefaultDesign.colors.secondary,
-                            style = MaterialTheme.typography.bodyLarge)
-                        else AnimatedContent(state.phase, transitionSpec = {
-                            fadeIn(VectorMotionSpec.transition(settings)) togetherWith fadeOut(VectorMotionSpec.exit(settings))
-                        }, label = "Call status") { phase ->
-                            CallingStatus(callStatus(phase), phase in listOf(VoiceCallPhase.Requesting, VoiceCallPhase.Ringing, VoiceCallPhase.Connecting) && foreground)
+                        Crossfade(state.phase,
+                            Modifier.heightIn(min = 24.dp).then(if (state.phase == VoiceCallPhase.Active) Modifier else Modifier.semantics { liveRegion = LiveRegionMode.Polite }),
+                            animationSpec = tween(VectorMotionSpec.duration(180, settings)), label = "Call status") { phase ->
+                            Text(if (phase == VoiceCallPhase.Active) callTime(seconds) else callStatus(phase),
+                                color = DefaultDesign.colors.secondary, style = MaterialTheme.typography.bodyLarge, textAlign = TextAlign.Center)
                         }
+                        CallActivityDots(foreground && state.phase in listOf(VoiceCallPhase.Requesting, VoiceCallPhase.Waiting,
+                            VoiceCallPhase.Ringing, VoiceCallPhase.Connecting))
                         if (security != null) Row(Modifier.padding(top = 12.dp).heightIn(min = 48.dp)
                             .clickable(onClickLabel = "Compare call encryption emojis") { securityInfo = true }
                             .padding(horizontal = 8.dp), horizontalArrangement = Arrangement.spacedBy(14.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -166,24 +185,38 @@ fun VoiceCallHost() {
                     }
                     }
                     Spacer(Modifier.height(if (short) 8.dp else 24.dp))
-                    if (state.phase == VoiceCallPhase.Incoming) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(48.dp)) {
-                            CallControl(CallIcons.HangUp, "Decline call", { calls.end() }, diameter = 68.dp, destructive = true)
-                            if (!state.video) CallControl(CallIcons.Phone, "Accept call", ::answer, diameter = 68.dp, active = true)
+                    val actionStage = when {
+                        state.phase == VoiceCallPhase.Incoming -> CallActionStage.Incoming
+                        terminal -> CallActionStage.Terminal
+                        else -> CallActionStage.Calling
+                    }
+                    AnimatedContent(actionStage, transitionSpec = {
+                        (fadeIn(tween(VectorMotionSpec.duration(220, settings))) togetherWith fadeOut(tween(VectorMotionSpec.duration(180, settings))))
+                            .using(SizeTransform(clip = false) { _, _ -> tween(VectorMotionSpec.duration(220, settings), easing = FastOutSlowInEasing) })
+                    }, contentAlignment = Alignment.Center, label = "Call actions") { stage ->
+                        when (stage) {
+                            CallActionStage.Incoming -> Row(horizontalArrangement = Arrangement.spacedBy(48.dp)) {
+                                CallControl(CallIcons.HangUp, "Decline call", { calls.end() }, diameter = 64.dp, destructive = true,
+                                    enabled = state.phase == VoiceCallPhase.Incoming, feedback = CallFeedback.Tick)
+                                if (!state.video) CallControl(CallIcons.Phone, "Accept call", ::answer, diameter = 64.dp, accepting = true,
+                                    enabled = state.phase == VoiceCallPhase.Incoming, feedback = CallFeedback.Confirm)
+                            }
+                            CallActionStage.Terminal -> CallControl(Icons.Default.Check, "Close call", calls::dismiss, diameter = 56.dp, quiet = true)
+                            CallActionStage.Calling -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
+                                    CallControl(if (state.muted) CallIcons.MicrophoneOff else VectorIcons.Microphone,
+                                        if (state.muted) "Unmute microphone" else "Mute microphone", calls::mute,
+                                        active = state.muted, enabled = controllable, feedback = CallFeedback.Tick,
+                                        value = if (state.muted) "Microphone muted" else "Microphone on")
+                                    CallControl(if (speaker) CallIcons.Speaker else CallIcons.SpeakerOff,
+                                        if (speaker) "Switch to private audio" else "Switch to speaker", calls::speaker,
+                                        active = speaker, enabled = controllable, feedback = CallFeedback.Tick, value = route)
+                                }
+                                Spacer(Modifier.height(if (short) 12.dp else 24.dp))
+                                CallControl(CallIcons.HangUp, "End call", { calls.end() }, diameter = 64.dp,
+                                    destructive = true, enabled = controllable, feedback = CallFeedback.Tick)
+                            }
                         }
-                    } else if (terminal) {
-                        CallControl(Icons.Default.Check, "Close call", calls::dismiss, diameter = 56.dp, quiet = true)
-                    } else {
-                        if (controllable) Row(horizontalArrangement = Arrangement.spacedBy(28.dp)) {
-                            CallControl(if (state.muted) CallIcons.MicrophoneOff else VectorIcons.Microphone,
-                                if (state.muted) "Unmute microphone" else "Mute microphone", calls::mute,
-                                active = state.muted, value = if (state.muted) "Microphone muted" else "Microphone on")
-                            CallControl(CallIcons.Speaker, if (speaker) "Switch to earpiece" else "Switch to speaker", calls::speaker,
-                                active = speaker, value = route)
-                        }
-                        Spacer(Modifier.height(if (short) 12.dp else 24.dp))
-                        CallControl(CallIcons.HangUp, "End call", { calls.end() }, diameter = 68.dp,
-                            destructive = true, enabled = state.phase != VoiceCallPhase.Ending)
                     }
                 }
             }
@@ -199,46 +232,81 @@ fun VoiceCallHost() {
                 Text(route, color = DefaultDesign.colors.secondary, style = MaterialTheme.typography.labelSmall)
                 Row(horizontalArrangement = Arrangement.spacedBy(20.dp)) {
                     CallControl(CallIcons.Speaker, if (speaker) "Switch to earpiece" else "Switch to speaker",
-                        { calls.speaker(); options = false }, active = speaker, value = route)
+                        { calls.speaker(); options = false }, active = speaker, value = route, feedback = CallFeedback.Tick)
                     CallControl(CallIcons.Bluetooth, "Use Bluetooth headset", { bluetooth(); options = false },
-                        active = output in listOf(AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLE_HEADSET))
+                        active = output in listOf(AudioDeviceInfo.TYPE_BLUETOOTH_SCO, AudioDeviceInfo.TYPE_BLE_HEADSET), enabled = state.audioReady, feedback = CallFeedback.Tick)
                 }
             }
         }
     }
 }
 
+private enum class CallActionStage { Incoming, Calling, Terminal }
+private enum class CallFeedback { Tick, Confirm }
+
+/** Tap-only feedback. No force flags or independent vibrator; Android's touch preference wins. */
+private fun performCallHaptic(view: android.view.View, context: android.content.Context, feedback: CallFeedback) {
+    try {
+        val audio = context.getSystemService(AudioManager::class.java)
+        val notifications = context.getSystemService(NotificationManager::class.java)
+        if (audio.ringerMode != AudioManager.RINGER_MODE_NORMAL || notifications.currentInterruptionFilter != NotificationManager.INTERRUPTION_FILTER_ALL) return
+        val effect = if (feedback == CallFeedback.Confirm) {
+            if (Build.VERSION.SDK_INT >= 30) HapticFeedbackConstants.CONFIRM else HapticFeedbackConstants.VIRTUAL_KEY
+        } else HapticFeedbackConstants.CLOCK_TICK
+        view.performHapticFeedback(effect)
+    } catch (_: RuntimeException) { /* Feedback must never prevent the actual call action. */ }
+}
+
 @Composable
-private fun CallingStatus(text: String, waiting: Boolean) {
+private fun CallActivityDots(waiting: Boolean) {
     val settings = LocalAppearance.current
-    if (waiting && VectorMotionSpec.strength(settings) > 0) {
-        val transition = rememberInfiniteTransition(label = "Calling feedback")
-        val alpha = transition.animateFloat(.65f, 1f, infiniteRepeatable(tween(VectorMotionSpec.duration(900, settings)), RepeatMode.Reverse), label = "Calling opacity")
-        Text(text, Modifier.graphicsLayer { this.alpha = alpha.value }, color = DefaultDesign.colors.secondary, style = MaterialTheme.typography.bodyMedium)
-    } else Text(text, color = DefaultDesign.colors.secondary, style = MaterialTheme.typography.bodyMedium)
+    val color = DefaultDesign.colors.secondary
+    val animated = waiting && VectorMotionSpec.strength(settings) > 0
+    val phase: State<Float> = if (animated) rememberInfiniteTransition(label = "Call activity").animateFloat(0f, 1f,
+        infiniteRepeatable(tween(VectorMotionSpec.duration(1200, settings), easing = LinearEasing)), label = "Calling dots")
+        else rememberUpdatedState(0f)
+    Box(Modifier.height(20.dp), contentAlignment = Alignment.Center) {
+        if (waiting) Canvas(Modifier.size(24.dp, 4.dp).clearAndSetSemantics {}) {
+            val radius = 1.5.dp.toPx()
+            repeat(3) { index ->
+                val alpha = if (animated) .55f + .25f * kotlin.math.cos((phase.value - index * .18f) * 2f * kotlin.math.PI.toFloat()) else .65f
+                drawCircle(color, radius, Offset(4.dp.toPx() + index * 8.dp.toPx(), size.height / 2), alpha = alpha)
+            }
+        }
+    }
 }
 
 @Composable
 private fun CallControl(icon: ImageVector, description: String, action: () -> Unit, diameter: Dp = 56.dp,
-    active: Boolean = false, destructive: Boolean = false, quiet: Boolean = false, enabled: Boolean = true, value: String? = null) {
+    active: Boolean = false, destructive: Boolean = false, quiet: Boolean = false, enabled: Boolean = true, value: String? = null,
+    accepting: Boolean = false, feedback: CallFeedback? = null) {
     val colors = DefaultDesign.colors
     val settings = LocalAppearance.current
+    val view = LocalView.current
+    val context = LocalContext.current
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val scale = animateFloatAsState(if (pressed) VectorMotionSpec.pressScale(.96f, settings) else 1f,
-        VectorMotionSpec.press(pressed, settings), label = "Call control press")
+    val scale = animateFloatAsState(if (pressed) VectorMotionSpec.pressScale(.97f, settings) else 1f,
+        tween(VectorMotionSpec.duration(if (pressed) 80 else 160, settings), easing = FastOutSlowInEasing), label = "Call control press")
     val background by animateColorAsState(when {
         destructive -> MaterialTheme.colorScheme.error.copy(alpha = .76f)
+        accepting -> colors.online.copy(alpha = .9f)
         active -> colors.accent.copy(alpha = .2f)
         quiet -> Color.Transparent
         else -> colors.raised
-    }, VectorMotionSpec.transition(settings), label = "Call control selection")
+    }, tween(VectorMotionSpec.duration(170, settings)), label = "Call control selection")
     Box(Modifier.size(diameter.coerceAtLeast(48.dp)).excludeModuleGestures().graphicsLayer { scaleX = scale.value; scaleY = scale.value; alpha = if (enabled) 1f else .45f }
         .clip(CircleShape).background(background)
-        .semantics { contentDescription = description; if (value != null) stateDescription = value }
-        .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClickLabel = description, onClick = action),
+        .semantics { contentDescription = description; if (value != null) { stateDescription = value; selected = active } }
+        .clickable(interactionSource = interaction, indication = null, enabled = enabled, role = Role.Button, onClickLabel = description, onClick = {
+            if (feedback != null && settings.haptics) performCallHaptic(view, context, feedback)
+            action()
+        }),
         contentAlignment = Alignment.Center) {
-        DesignIcon(icon, null, Modifier.size(if (diameter >= 68.dp) 28.dp else 24.dp), tint = if (destructive) Color.White else if (active) colors.accent else colors.text)
+        Crossfade(icon, animationSpec = tween(VectorMotionSpec.duration(150, settings)), label = "Call control icon") { glyph ->
+            DesignIcon(glyph, null, Modifier.size(if (diameter >= 62.dp) 28.dp else 24.dp),
+                tint = if (destructive) Color.White else if (accepting) colors.onAccent else if (active) colors.accent else colors.text)
+        }
     }
 }
 
@@ -266,7 +334,7 @@ private fun FloatingCallIndicator(state: VoiceCallState, time: String, onOpen: (
 @Suppress("DEPRECATION")
 private fun callTime(seconds: Long) = "%02d:%02d".format(java.util.Locale.ROOT, seconds.coerceAtLeast(0) / 60, seconds.coerceAtLeast(0) % 60)
 private fun callStatus(phase: VoiceCallPhase) = when (phase) {
-    VoiceCallPhase.Incoming -> "Incoming call"; VoiceCallPhase.Requesting -> "Calling…"; VoiceCallPhase.Ringing -> "Ringing…"
+    VoiceCallPhase.Incoming -> "Incoming call"; VoiceCallPhase.Requesting -> "Calling…"; VoiceCallPhase.Waiting -> "Waiting…"; VoiceCallPhase.Ringing -> "Ringing…"
     VoiceCallPhase.Connecting -> "Connecting…"; VoiceCallPhase.Reconnecting -> "Reconnecting…"; VoiceCallPhase.Ending -> "Ending…"
     VoiceCallPhase.Ended -> "Call ended"; VoiceCallPhase.Failed -> "Call failed"; else -> ""
 }

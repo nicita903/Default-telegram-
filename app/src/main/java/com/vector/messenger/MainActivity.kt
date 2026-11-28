@@ -61,10 +61,15 @@ class MainActivity : ComponentActivity() {
     }
     private fun handleCallIntent(action: android.content.Intent?) {
         if (action == null || !voiceCalls.issuedCallIntent(action)) return
+        com.vector.messenger.calling.callAudioDiagnostic("CALL_WINDOW_OPEN_REQUESTED", "action=${if (action.action == TelegramCallPlatform.ANSWER) "answer" else "open"}")
         setShowWhenLocked(true); setTurnScreenOn(true)
         lifecycleScope.launch {
             lifecycle.currentStateFlow.first { it.isAtLeast(Lifecycle.State.RESUMED) }
-            if (!voiceCalls.resolveCallIntent(action)) { setShowWhenLocked(false); setTurnScreenOn(false); return@launch }
+            if (!voiceCalls.resolveCallIntent(action)) {
+                com.vector.messenger.calling.callAudioDiagnostic("CALL_WINDOW_RESOLVED", "valid=false")
+                setShowWhenLocked(false); setTurnScreenOn(false); return@launch
+            }
+            com.vector.messenger.calling.callAudioDiagnostic("CALL_WINDOW_RESOLVED", "valid=true")
             if (action.action == TelegramCallPlatform.ANSWER) {
                 if (androidx.core.content.ContextCompat.checkSelfPermission(this@MainActivity, android.Manifest.permission.RECORD_AUDIO) == android.content.pm.PackageManager.PERMISSION_GRANTED)
                     voiceCalls.answer()
